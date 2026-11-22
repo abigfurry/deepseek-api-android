@@ -131,6 +131,7 @@ object SettingsPage {
     const val DEVICES = "devices"
     const val HELP = "help"
     const val LEGAL = "legal"
+    const val OPEN_SOURCE = "opensource"
     const val DOC_TERMS = "doc:terms"
     const val DOC_PRIVACY = "doc:privacy"
     const val DOC_SDK = "doc:sdk"
@@ -166,6 +167,7 @@ internal fun settingsPageTitle(page: String): String = when (page) {
     SettingsPage.DEVICES -> "登录设备管理"
     SettingsPage.HELP -> "帮助与反馈"
     SettingsPage.LEGAL -> "版权与免责声明"
+        SettingsPage.OPEN_SOURCE -> "开源项目"
     SettingsPage.DOC_TERMS -> "用户协议"
     SettingsPage.DOC_PRIVACY -> "隐私政策"
     SettingsPage.DOC_SDK -> "第三方信息共享清单"
@@ -605,6 +607,14 @@ private fun MainSettingsPage(
                 icon = "doc",
                 chevron = true,
                 onClick = { onNavigate(SettingsPage.LEGAL) },
+            )
+            // 开源：仓库地址 / Releases / 协议 / 第三方组件（OpenSourcePage.kt）
+            SettingRow(
+                label = "开源项目",
+                icon = "info",
+                value = "MIT",
+                chevron = true,
+                onClick = { onNavigate(SettingsPage.OPEN_SOURCE) },
             )
         }
 

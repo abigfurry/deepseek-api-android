@@ -447,8 +447,16 @@ object ProviderApi {
      * 注意：Bearer 分支即使 key 为空也照样发 `Authorization: Bearer `，与改造前的
      * `Client.chat()` 完全一致（DeepSeek 回归第一优先，保持字节级相同的头）。
      */
+    /**
+     * 把用户填的 Key 洗成「可放进 HTTP 头 / URL 的 ASCII 可见字符」。
+     * OkHttp 的 Header 校验遇到非 ASCII 会直接抛 IllegalArgumentException（实测崩过一次：
+     * 存进去的 Key 里混进了一个 CJK 字符 -> "Unexpected char 0x7701 in Authorization value"）。
+     * Key 本来就是 ASCII，所以这里直接过滤掉非法字符，宁可 401 也不能崩。
+     */
+    fun sanitizeKey(raw: String): String = raw.trim().filter { it.code in 33..126 }
+
     fun authHeaders(preset: ProviderPreset, apiKey: String): Map<String, String> {
-        val key = apiKey.trim()
+        val key = sanitizeKey(apiKey)
         val m = LinkedHashMap<String, String>()
         when (preset.auth) {
             AuthStyle.Bearer -> m["Authorization"] = "Bearer " + key

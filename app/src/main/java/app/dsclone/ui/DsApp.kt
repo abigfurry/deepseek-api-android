@@ -159,6 +159,27 @@ fun DsApp() {
         if (granted) cameraOpen = true
     }
 
+    // ── 权限同意弹窗状态（mic / camera）──────────────────────────────────────
+    var permKind by remember { mutableStateOf("") }     // "" | "mic" | "camera"
+    var permDenied by remember { mutableStateOf("") }   // 被拒绝后提示哪种权限
+    val activityRef = ctx as? android.app.Activity
+    fun permGranted(perm: String): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(ctx, perm) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+    fun permCanAsk(perm: String): Boolean = runCatching {
+        activityRef?.shouldShowRequestPermissionRationale(perm) ?: false
+    }.getOrDefault(false)
+    fun openAppPermissionSettings() {
+        runCatching {
+            ctx.startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.fromParts("package", ctx.packageName, null),
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
     val wantDemo = remember {
         ((ctx as? android.app.Activity)?.intent?.getBooleanExtra("demo", false)) ?: false
     }
@@ -632,7 +653,8 @@ $$
                         ) {
                             voiceMode = true
                         } else {
-                            micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                            // 先弹「同意」说明弹窗，同意后再走系统权限
+                            permKind = "mic"
                         }
                     },
                     onVoiceStart = { voiceCancelArmed = false; voiceHolding = true; runCatching { voice.start(settings) } },
@@ -686,7 +708,7 @@ $$
                     ),
                 ) {
                     AttachmentTileRow(
-                        onCamera = { attachSheet = false; cameraPermission.launch(android.Manifest.permission.CAMERA) },
+                        onCamera = { attachSheet = false; permKind = "camera" },
                         onGallery = {
                             attachSheet = false
                             galleryLauncher.launch(
@@ -782,6 +804,44 @@ $$
             }
         }
 
+        // 权限说明 / 被拒绝引导
+        if (permKind.isNotEmpty()) {
+            val isMic = permKind == "mic"
+            val perm = if (isMic) android.Manifest.permission.RECORD_AUDIO else android.Manifest.permission.CAMERA
+            val kind = permKind
+            PermissionDialog(
+                kind = kind,
+                denied = false,
+                onDismiss = { permKind = "" },
+                onConfirm = {
+                    permKind = ""
+                    if (permGranted(perm)) {
+                        if (isMic) voiceMode = true else cameraOpen = true
+                    } else {
+                        permDenied = kind
+                        if (isMic) micPermission.launch(perm) else cameraPermission.launch(perm)
+                    }
+                },
+                onOpenSettings = { permKind = ""; openAppPermissionSettings() },
+            )
+        }
+        if (permDenied.isNotEmpty()) {
+            val isMic = permDenied == "mic"
+            val perm = if (isMic) android.Manifest.permission.RECORD_AUDIO else android.Manifest.permission.CAMERA
+            val canAsk = permCanAsk(perm)
+            val kind = permDenied
+            PermissionDialog(
+                kind = kind,
+                denied = true,
+                canAsk = canAsk,
+                onDismiss = { permDenied = "" },
+                onConfirm = {
+                    permDenied = ""
+                    if (isMic) micPermission.launch(perm) else cameraPermission.launch(perm)
+                },
+                onOpenSettings = { permDenied = ""; openAppPermissionSettings() },
+            )
+        }
         if (showSettings) {
             SettingsSheet(
                 initial = settings,

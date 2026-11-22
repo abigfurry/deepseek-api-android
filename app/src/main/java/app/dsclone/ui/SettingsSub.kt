@@ -122,6 +122,7 @@ internal fun SettingsSubPage(
         SettingsPage.DEVICES -> DevicesPage()
         SettingsPage.HELP -> TextPage(HELP_TEXT)
         SettingsPage.LEGAL -> TextPage(LEGAL_TEXT)
+        SettingsPage.OPEN_SOURCE -> com.yuyuyu.deepseek.ui.OpenSourcePage()
         else -> TextPage(docBody(page))
     }
 }
