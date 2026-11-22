@@ -550,59 +550,42 @@ fun MarkdownView(
         MaterialTheme.colorScheme.onBackground else textColor
     val blocks = remember(source) { parseMarkdown(source) }
 
-    // 官方：点「选择文本」只选中「长按点所在的那一段」，不是整条消息全选。
-    // 所以每个块各自一个 SelectionContainer / SelectionState。
-    val states = remember(blocks) { List(blocks.size) { SelectionState() } }
-    val tops = remember(blocks) { FloatArray(blocks.size) { -1f } }
-    val heights = remember(blocks) { FloatArray(blocks.size) { 0f } }
-    var selfTop by remember(blocks) { mutableFloatStateOf(0f) }
+    // 整条消息只用**一个** SelectionState / SelectionContainer：
+    // 之前是每个 Markdown 块各自一个容器，导致「只能在某一段里选，跨不了段、也选不了全文」
+    // （用户反馈：只能选那一段，不能把整段文字都框选到）。
+    // 合成一个容器后，拖动选择柄可以跨段落连续选中整条消息。
+    val selState = remember(blocks) { SelectionState() }
 
-    LaunchedEffect(selectionMode, selectAtY, blocks) {
+    LaunchedEffect(selectionMode, blocks) {
         if (!selectionMode) {
-            states.forEach { runCatching { it.clear() } }
+            runCatching { selState.clear() }
             return@LaunchedEffect
         }
+        // 进入「选择文本」时默认全选这条消息，用户可以直接复制 / 再拖动手柄微调
         kotlinx.coroutines.delay(80)
-        val localY = if (selectAtY < 0f) 0f else selectAtY - selfTop
-        var pick = -1
-        var below = -1
-        for (i in blocks.indices) {
-            val t = tops[i]
-            if (t < 0f) continue
-            if (localY >= t && localY < t + heights[i]) { pick = i; break }
-            if (below < 0 && t > localY) below = i
-        }
-        if (pick < 0) pick = below
-        if (pick < 0) pick = 0
-        if (pick in states.indices) runCatching { states[pick].selectAll() }
+        runCatching { selState.selectAll() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .onGloballyPositioned { selfTop = it.positionInWindow().y },
-        // 官方段落间距 ≈19dp（实测），思考区按 12dp
-        verticalArrangement = Arrangement.spacedBy(if (compact) MD_COMPACT_GAP else MD_PARA_GAP)
-    ) {
-        val winTop = selfTop
-        for ((idx, block) in blocks.withIndex()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .onGloballyPositioned { c ->
-                        tops[idx] = c.positionInWindow().y - winTop
-                        heights[idx] = c.size.height.toFloat()
-                    }
-            ) {
-                if (selectionMode) {
-                    androidx.compose.foundation.text.selection.SelectionContainer(state = states[idx]) {
-                        MarkdownBlock(block, fg, compact)
-                    }
-                } else {
+    val content: @Composable () -> Unit = {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            // 官方段落间距 ≈19dp（实测），思考区按 12dp
+            verticalArrangement = Arrangement.spacedBy(if (compact) MD_COMPACT_GAP else MD_PARA_GAP)
+        ) {
+            for (block in blocks) {
+                Box(Modifier.fillMaxWidth()) {
                     MarkdownBlock(block, fg, compact)
                 }
             }
         }
+    }
+
+    if (selectionMode) {
+        androidx.compose.foundation.text.selection.SelectionContainer(state = selState) {
+            content()
+        }
+    } else {
+        content()
     }
 }
 
