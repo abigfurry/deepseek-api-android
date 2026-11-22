@@ -596,14 +596,14 @@ private fun MarkdownBlock(block: MdBlock, fg: androidx.compose.ui.graphics.Color
 
                 // 正文 17sp/26sp（思考区 15sp/24sp），字色官方 #191B23 / #E1E2EC
                 is MdBlock.Para -> Text(
-                    text = inlineMarkdown(block.text, ds.codeBg),
+                    text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
                     style = mdBodyStyle(compact),
                     color = fg,
                 )
 
                 // 标题 h1 26/39 … h6 13/18，SemiBold，同正文色
                 is MdBlock.Head -> Text(
-                    text = inlineMarkdown(block.text, ds.codeBg),
+                    text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
                     style = mdHeadStyle(block.level, compact),
                     color = fg,
                 )
@@ -657,7 +657,7 @@ private fun MarkdownBlock(block: MdBlock, fg: androidx.compose.ui.graphics.Color
                             .background(mdDividerColor(ds), RoundedCornerShape(2.dp))
                     )
                     Text(
-                        text = inlineMarkdown(block.text, ds.codeBg),
+                        text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
                         style = mdBodyStyle(compact),
                         color = ds.thoughtText,
                         modifier = Modifier.padding(start = MD_QUOTE_PAD),
@@ -701,7 +701,7 @@ private fun ListItemRow(
             )
         }
         Text(
-            text = inlineMarkdown(item, ds.codeBg),
+            text = remember(item, ds.codeBg) { inlineMarkdown(item, ds.codeBg) },
             style = mdBodyStyle(compact),
             color = fg,
             modifier = Modifier.padding(start = 0.dp),

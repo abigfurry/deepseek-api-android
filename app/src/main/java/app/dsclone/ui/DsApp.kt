@@ -60,6 +60,10 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.layout
+
+/** 流式文本最多每这么久合并提交一次 UI（33ms ≈ 30fps；再快肉眼无收益，纯烧主线程）。 */
+private const val STREAM_UI_FRAME_MS = 33L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,6 +81,9 @@ fun DsApp() {
     }
     val main = remember { Handler(Looper.getMainLooper()) }
     val clipboard = LocalClipboardManager.current
+    // 流式输出的「实时文本」旁路（见 ChatParts.StreamUi）：流式期间 token 只写这里，
+    // 不写 sessions，避免每个 token 都让整个 DsApp 子树重组（gfxinfo 实测流式最容易掉帧）。
+    val streamUi = remember { StreamUi() }
 
     var settings by remember { mutableStateOf(Store.loadSettings(ctx)) }
     val sessions = remember {
@@ -258,53 +265,161 @@ $$
         sessions[si] = s.copy(messages = list, updatedAt = System.currentTimeMillis())
     }
 
+    /**
+     * 发起一轮流式请求。
+     *
+     * 掉帧改造（2026-11-23）：旧实现在 onDelta 里**每个 token** 都 `patch()` 一次 sessions。
+     * sessions 是 DsApp 顶层读的 SnapshotStateList —— 每写一次，DsApp 整棵子树
+     * （DrawerContent 侧栏、TopBar、InputBar、MessageList）全部重组 + 整屏重新测量，
+     * 服务端 token 频率上百 Hz，主线程直接被重组占满（gfxinfo 基线：流式 p90 46ms、
+     * 99th 133ms、10.79% janky、平均只有 31fps）。onSteps 同理会更频繁。
+     *
+     * 现在：
+     *  1. token 先攒进缓冲区（[lock] 保护的 StringBuilder），最多每 [STREAM_UI_FRAME_MS] 把
+     *     「累计文本」发布到 [streamUi] 一次（≈30fps）。发布只让「正在流式那条消息的 item」
+     *     重组（只有它读 streamUi.live），侧栏 / 顶栏 / 输入卡不再跟着重组。
+     *  2. 结束时（onDone / onError）把累计文本一次性并入 sessions 并落盘，
+     *     写入的内容与旧实现逐字一致（text/reasoning/steps/citations 全量覆盖）。
+     *  3. steps（联网工具步骤）与 token 走同一个节流通道，不再单独高频 patch。
+     */
     fun runChat(
         sessionId: String,
-        botId: Long,
+        botMsg: Msg,
         history: List<Msg>,
         images: List<String> = emptyList(),
     ) {
         sending = true
         val startedAt = System.currentTimeMillis()
+        val lock = Any()
+        val accText = StringBuilder()
+        val accReason = StringBuilder()
+        val pendText = StringBuilder()
+        val pendReason = StringBuilder()
+        var curSteps: List<com.yuyuyu.deepseek.data.Step> = emptyList()
+        var curCalls = ""
+        var curCites: List<com.yuyuyu.deepseek.data.Source> = emptyList()
+        var dirty = false
+        var flushQueued = false
+        var closed = false
+
+        // main 线程：把缓冲区并进累计值，生成一条新的 overlay 消息（相同 id）。
+        fun snapshotLocked(): Msg {
+            accText.append(pendText); pendText.setLength(0)
+            accReason.append(pendReason); pendReason.setLength(0)
+            dirty = false
+            return botMsg.copy(
+                text = accText.toString(),
+                reasoning = accReason.toString(),
+                steps = if (curSteps.isEmpty()) botMsg.steps else curSteps,
+                serverToolCalls = curCalls.ifBlank { botMsg.serverToolCalls },
+                citations = if (curCites.isEmpty()) botMsg.citations else curCites,
+            )
+        }
+
+        fun publishNow() {
+            var msg: Msg? = null
+            synchronized(lock) {
+                if (dirty && !closed) msg = snapshotLocked()
+            }
+            msg?.let { streamUi.live = it }
+        }
+
+        // main 线程：收尾，关掉节流并返回含全部已收 token 的消息
+        fun finish(): Msg {
+            var msg: Msg? = null
+            synchronized(lock) {
+                closed = true
+                msg = snapshotLocked()
+            }
+            streamUi.live = null
+            return msg ?: botMsg
+        }
+
+        // OkHttp 读线程：只写缓冲区，不碰 Compose 状态。
+        // 每 33ms 最多投递一次 main 线程任务（flushQueued 闸门），避免 post 洪水。
+        fun scheduleFlush() {
+            main.postDelayed({
+                synchronized(lock) { flushQueued = false }
+                publishNow()
+            }, STREAM_UI_FRAME_MS)
+        }
+
+        fun enqueueDelta(content: String, reasoning: String) {
+            if (content.isEmpty() && reasoning.isEmpty()) return
+            var schedule = false
+            synchronized(lock) {
+                if (!closed) {
+                    pendText.append(content)
+                    pendReason.append(reasoning)
+                    dirty = true
+                    if (!flushQueued) {
+                        flushQueued = true
+                        schedule = true
+                    }
+                }
+            }
+            if (schedule) scheduleFlush()
+        }
+
+        fun enqueueSteps(
+            steps: List<com.yuyuyu.deepseek.data.Step>,
+            rawCalls: String,
+            citations: List<com.yuyuyu.deepseek.data.Source>,
+        ) {
+            var schedule = false
+            synchronized(lock) {
+                if (!closed) {
+                    curSteps = steps
+                    curCalls = rawCalls
+                    curCites = citations
+                    dirty = true
+                    if (!flushQueued) {
+                        flushQueued = true
+                        schedule = true
+                    }
+                }
+            }
+            if (schedule) scheduleFlush()
+        }
+
         activeCall = Client.chat(
             settings = settings,
             history = history,
-            onDelta = { content, reasoning ->
-                main.post {
-                    patch(sessionId, botId) { m ->
-                        m.copy(text = m.text + content, reasoning = m.reasoning + reasoning)
-                    }
-                }
-            },
+            onDelta = { content, reasoning -> enqueueDelta(content, reasoning) },
             onDone = {
                 main.post {
                     val secs = ((System.currentTimeMillis() - startedAt) / 1000).toInt()
-                    // 流式结束把?思?用时固化进当前，分支切换时才能互相
-    patch(sessionId, botId) { it.copy(streaming = false, thinkSeconds = secs).syncActiveVariant() }
+                    val finalMsg = finish()
+                    // 流式结束把「思考用时」固化进当前，分支切换时才能互相
+                    patch(sessionId, botMsg.id) {
+                        it.copy(
+                            text = finalMsg.text,
+                            reasoning = finalMsg.reasoning,
+                            steps = finalMsg.steps,
+                            serverToolCalls = finalMsg.serverToolCalls,
+                            citations = finalMsg.citations,
+                            streaming = false,
+                            thinkSeconds = secs,
+                        ).syncActiveVariant()
+                    }
                     sending = false
                     persist()
                 }
             },
-            onSteps = { steps, rawCalls, citations ->
-                main.post {
-                    patch(sessionId, botId) { m ->
-                        m.copy(
-                            // 服务网工具（stream  server_tool_event / ?server_tool_calls
-    steps = if (steps.isEmpty()) m.steps else steps,
-                            serverToolCalls = rawCalls.ifBlank { m.serverToolCalls },
-                            // annotations ?官方那「来源小圆标 + N 页
-    citations = if (citations.isEmpty()) m.citations else citations,
-                        )
-                    }
-                }
-            },
+            onSteps = { steps, rawCalls, citations -> enqueueSteps(steps, rawCalls, citations) },
             onError = { err ->
                 main.post {
-                    patch(sessionId, botId) { m ->
+                    val finalMsg = finish()
+                    patch(sessionId, botMsg.id) { m ->
                         m.copy(
+                            reasoning = finalMsg.reasoning,
+                            steps = if (finalMsg.steps.isEmpty()) m.steps else finalMsg.steps,
+                            serverToolCalls = if (finalMsg.serverToolCalls.isBlank()) m.serverToolCalls
+                                else finalMsg.serverToolCalls,
+                            citations = if (finalMsg.citations.isEmpty()) m.citations else finalMsg.citations,
                             streaming = false,
                             error = true,
-                            text = if (m.text.isBlank()) err else m.text + "\n\n" + err,
+                            text = if (finalMsg.text.isBlank()) err else finalMsg.text + "\n\n" + err,
                         ).syncActiveVariant()
                     }
                     sending = false
@@ -406,7 +521,7 @@ $$
         )
         editing = null
         input = ""
-        runChat(sid, botMsg.id, base + userMsg, imageUrls)
+        runChat(sid, botMsg, base + userMsg, imageUrls)
         attachments.clear()
     }
 
@@ -456,7 +571,7 @@ $$
         )
         val si = sessions.indexOfFirst { it.id == s.id }
         sessions[si] = s.copy(messages = base + botMsg, updatedAt = System.currentTimeMillis())
-        runChat(s.id, botMsg.id, base)
+        runChat(s.id, botMsg, base)
     }
 
     /** 分支切换：纯把内容写?text/reasoning，绝不重新发请求 */
@@ -593,6 +708,7 @@ $$
                             } else {
                                 MessageList(
                                     state = listState,
+                                    stream = streamUi,
                                     scrollToMessageId = jumpToMessageId,
                                     onScrolledToMessage = { jumpToMessageId = -1L },
                                     messages = msgs,
@@ -747,7 +863,15 @@ $$
                 // 官方：抽屉面板 305dp + 1dp 分隔线（总共 306dp），内容栏 = 494dp（800−306）。
                 // 容器宽度按 306dp 动画，分隔线永远贴在容器右缘、正好补掉纸片右缘那 1dp。
                 val drawerTotal = drawerW + 1.dp
-                val shift by androidx.compose.animation.core.animateFloatAsState(
+                // 掉帧关键点（2026-11-23）：这里**不能**用 `by` 在组合里读取 shift。
+                // 旧写法 `Modifier.width(drawerTotal * shift)` 会在组合期读动画 State，
+                // 于是动画每一帧都让整个 DsApp 重组（侧栏 DrawerContent + 顶栏 + 输入卡 +
+                // 消息列表全部重跑），再加上宽度变化带来的整屏 relayout ——
+                // gfxinfo 基线：抽屉开合帧 p90/99 = 150ms，一次 240ms 动画只画出 3~4 帧。
+                // 现在改成：State 只在**布局阶段**（Modifier.layout 的 measure 块）和
+                // **绘制阶段**（graphicsLayer）里读，重组完全不被触发，动画每帧只做
+                // 「抽屉容器重新测量 + 内容栏宽度变化」这一件事。
+                val shiftState = androidx.compose.animation.core.animateFloatAsState(
                     targetValue = if (drawerOpen) 1f else 0f,
                     animationSpec = androidx.compose.animation.core.tween(
                         durationMillis = 240,
@@ -765,8 +889,17 @@ $$
                     // 平移到 0，所以整张纸（含其中的文字）一起滑进来，右缘的分隔线跟着抽屉右缘走。
                     Box(
                         Modifier
-                            .width(drawerTotal * shift)
                             .fillMaxHeight()
+                            // 等价于旧 width(drawerTotal * shift)，但 shift 在布局阶段读：
+                            // 只让本节点的 measure 失效，不会让 DsApp 重组。
+                            .layout { measurable, constraints ->
+                                val target = (drawerTotal.toPx() * shiftState.value).toInt()
+                                    .coerceIn(0, constraints.maxWidth)
+                                val placeable = measurable.measure(
+                                    constraints.copy(minWidth = target, maxWidth = target)
+                                )
+                                layout(target, placeable.height) { placeable.place(0, 0) }
+                            }
                             .clip(androidx.compose.ui.graphics.RectangleShape)
                     ) {
                         Box(
@@ -777,7 +910,7 @@ $$
                                 .requiredWidth(drawerW)
                                 // 纸片平移：只走绘制层，不参与布局，避免和容器宽度动画互相打架
                                 .graphicsLayer {
-                                    translationX = -drawerTotal.toPx() * (1f - shift)
+                                    translationX = -drawerTotal.toPx() * (1f - shiftState.value)
                                 }
                         ) {
                             drawer()

@@ -63,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
@@ -221,6 +222,25 @@ fun TopBar(
 
 /* ------------------------------------------------------------ 消息列表 */
 
+/**
+ * 流式输出的「实时文本」旁路。
+ *
+ * 为什么不再每个 token 写进 `sessions`：sessions 是 DsApp 顶层读的 SnapshotStateList，
+ * 每写一次，DsApp 整棵子树（DrawerContent 侧栏、TopBar、InputBar、MessageList）都会重组
+ * 并且整屏重新测量。服务端 token 频率可达上百 Hz，主线程被重组吃满 ——
+ * gfxinfo 基线实测：流式时 p90 46ms / 99th 133ms、10.79% janky、平均只有 31fps。
+ *
+ * 现在 token 只写这个对象：
+ *   · DsApp 顶层**不读**它 → 不重组；
+ *   · 只有 MessageList 里「正在流式那条消息」的 item 读它 → 只重组那一行；
+ *   · 流式结束由 DsApp 一次性并入 sessions（内容与旧实现逐字一致）。
+ */
+@androidx.compose.runtime.Stable
+class StreamUi {
+    /** 正在流式的那条消息的实时快照（id 与 sessions 里的 bot 消息相同）；null = 当前没有流式内容。 */
+    var live by mutableStateOf<Msg?>(null)
+}
+
 @Composable
 fun MessageList(
     messages: List<Msg>,
@@ -231,6 +251,7 @@ fun MessageList(
     onDeleteFrom: (Msg) -> Unit,
     onShowContext: () -> Unit,
     state: LazyListState = rememberLazyListState(),
+    stream: StreamUi = remember { StreamUi() },
     scrollToMessageId: Long = -1L,
     onScrolledToMessage: () -> Unit = {},
 ) {
@@ -263,6 +284,23 @@ fun MessageList(
         }
     }
 
+    // 流式跟随：流式文本（StreamUi）不写 sessions，所以上面的 effect 不会触发。
+    // 这里用 snapshotFlow 观察「正在流式的文本长度」，只在快贴底时滚到底。
+    // 注意：snapshotFlow 的读取发生在协程里，不是组合期，不会让 MessageList 重组。
+    LaunchedEffect(stream, messages) {
+        snapshotFlow {
+            val live = stream.live
+            if (live == null) null else live.id to (live.text.length + live.reasoning.length)
+        }.collect { v ->
+            if (v == null) return@collect
+            if (pendingJump.value > 0) return@collect
+            if (messages.isNotEmpty()) {
+                val visibleLast = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                if (visibleLast >= messages.size - 2) state.scrollToItem(messages.lastIndex)
+            }
+        }
+    }
+
     // 官方是「会话级唯一选中」：同一时刻只有一条消息处于选择态
     var selectingId by remember { mutableStateOf<Long?>(null) }
 
@@ -272,8 +310,13 @@ fun MessageList(
         contentPadding = PaddingValues(top = 12.dp, bottom = 8.dp),
     ) {
         items(messages, key = { it.id }) { m ->
+            // 正在流式的那一条：把 StreamUi 里的实时文本叠加进来。
+            // 这一步只在「本 item 的组合作用域」里读 stream.live —— 每 33ms 一次，
+            // 只会重组这一行，侧栏/顶栏/输入卡/其它消息都不动。
+            val live = stream.live
+            val shown = if (live != null && live.id == m.id) live else m
             MessageRow(
-                m = m,
+                m = shown,
                 isLast = m.id == last?.id,
                 onCopy = onCopy,
                 onEdit = onEdit,
@@ -317,6 +360,12 @@ private fun MessageRow(
     val density = LocalDensity.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
 
+    // 掉帧点（2026-11-23 修）：旧实现 `.onGloballyPositioned { origin = it.positionInWindow() }`
+    // 在**每次布局**都往 mutableState 写值，而 origin 又在组合期被读（selectAtY）——
+    // 滚动/抽屉开合/流式长高时每一帧每一条可见消息都会「写 state → 重组 → 再布局」，
+    // 白白烧主线程（实测抽屉宽度动画每帧 85ms 就来自这类重复重组）。
+    // 现在坐标只存进一个普通数组（不是 State，不触发重组），只在真正长按时取一次。
+    val coordsRef = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
 
     // 正文列宽按当前内容栏宽度自适应（官方两栏 pane=494dp 时正文列 417.5dp，
     // 比原来的 494−2×62.5=369.5dp 宽 48dp —— 也就是用户嫌窄的那段）。见 bodyPadX()。
@@ -325,7 +374,7 @@ private fun MessageRow(
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { c -> origin = c.positionInWindow() }
+            .onGloballyPositioned { c -> coordsRef[0] = c }
             // 进入「选择文本」后必须让出长按，否则外层手势把长按吃掉，
             // SelectionContainer 永远收不到事件，就又变成选不了
             .then(
@@ -335,7 +384,10 @@ private fun MessageRow(
                         onTap = { if (anySelecting && !selecting) onStopSelect() },
                         onLongPress = { off ->
                             // MsgMenu 的 Popup 是 message-relative（没有 alignment），
-                            // 所以这里只能给手势的相对坐标；再加 origin 就是把自己在窗口的位置算两遍
+                            // 所以这里只能给手势的相对坐标；origin 是本条消息在窗口里的位置
+                            // （长按这一刻取一次，菜单/选字定位只用这一次的值）
+                            origin = coordsRef[0]?.positionInWindow()
+                                ?: androidx.compose.ui.geometry.Offset.Zero
                             anchor = off
                             menu = true
                         },
