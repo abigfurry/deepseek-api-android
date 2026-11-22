@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 默认主题 = 深色窗口底。
+         原因：冷启动的「启动窗口/启动画面」由**清单里的主题**决定，Activity 里再 setTheme 已经晚了，
+         所以清单默认必须是用户最常用的那种底色。深色用户不会再看到「先白后黑」。
+         浅色用户由 MainActivity 在 super.onCreate 之前 setTheme(Theme.DS.Light) 切过去。 -->
+    <style name="Theme.DS" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF0F0F0F</item>
+        <!-- Android 12+ 的启动画面用自己的底色；不写这个就用系统默认浅色 → 开机白闪 -->
+        <item name="android:windowSplashScreenBackground">#FF0F0F0F</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.DS.Light" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFFFF</item>
+        <item name="android:windowSplashScreenBackground">#FFFFFFFF</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

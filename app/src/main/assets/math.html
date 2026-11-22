@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="katex/katex.min.css">
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+  #c{padding:2px 0}
+  .katex{font-size:1.06em}
+</style>
+<script src="katex/katex.min.js"></script>
+</head><body><div id="c"></div>
+<script>
+function renderMath(tex, display){
+  var el=document.getElementById('c');
+  try{ katex.render(tex, el, {displayMode: !!display, throwOnError:false, output:'html'}); }
+  catch(e){ el.textContent = tex; }
+  var h = Math.ceil(document.body.scrollHeight);
+  MathBridge.onRendered(h);
+}
+</script></body></html>

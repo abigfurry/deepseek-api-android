@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 yumi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+附加说明（不属于 MIT 条款，但作为项目声明一并保留）：
+
+1. 本项目 "DeepSeek API 版本" 是第三方独立开发的**非官方**客户端，与 DeepSeek
+   （杭州深度求索人工智能基础技术研究有限公司）及其关联公司无任何隶属、合作、
+   授权或背书关系。
+2. "DeepSeek" 名称、Logo 及相关标识的商标权、著作权归权利人所有。本项目仅在
+   客观描述所连接的第三方 API 服务时使用，无意主张任何权利。若权利人认为使用
+   不当，请联系 3982548020@qq.com，作者将在核实后及时移除或修改相关素材。
+3. 本项目不包含官方客户端的任何专有代码，仅通过公开 HTTP API 与第三方服务通信。
+4. 使用者需自行申请并遵守所使用 API 服务商的条款与计费规则，并承担相应费用。
+5. 模型输出由第三方模型生成，可能不准确、不完整或存在偏见，仅供参考。

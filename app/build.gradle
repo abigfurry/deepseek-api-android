@@ -1,0 +1,76 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+android {
+    namespace 'com.yuyuyu.deepseek'
+    compileSdk 37
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId 'com.yuyuyu.deepseek'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures { compose true }
+
+    signingConfigs {
+        debug {
+            storeFile file('D:/unpackandroidrom-2.2.5/_work/debug.jks')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        // 正式发布用：别名 yumi，密码/口令都是 yu19217328268
+        // keytool -genkeypair -keystore _work/keys/yumi-release.jks -alias yumi \
+        //   -keyalg RSA -keysize 2048 -validity 10000 -storepass yu19217328268 -keypass yu19217328268
+        release {
+            storeFile file('D:/unpackandroidrom-2.2.5/_work/keys/yumi-release.jks')
+            storePassword 'yu19217328268'
+            keyAlias 'yumi'
+            keyPassword 'yu19217328268'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    implementation('com.airbnb.android:lottie-compose:6.6.2')
+    implementation('io.coil-kt:coil-compose:2.6.0')
+
+    implementation platform('androidx.compose:compose-bom:2026.09.00')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-core'
+    implementation 'androidx.activity:activity-compose:1.12.4'
+    implementation 'androidx.core:core-ktx:1.18.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.5.1'
+    implementation 'androidx.camera:camera-core:1.5.3'
+    implementation 'androidx.camera:camera-camera2:1.5.3'
+    implementation 'androidx.camera:camera-lifecycle:1.5.3'
+    implementation 'androidx.camera:camera-view:1.5.3'
+    implementation 'androidx.webkit:webkit:1.12.1'
+}
+
