@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -69,6 +70,8 @@ private const val STREAM_UI_FRAME_MS = 33L
 @Composable
 fun DsApp() {
     val ctx = LocalContext.current
+    // 系统「动画时长缩放」：逐帧动画（FrameAnim）的时长按它缩放（0=直接到末态）
+    LaunchedEffect(Unit) { DsAnimScale.read(ctx) }
     val scope = rememberCoroutineScope()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val atBottom by androidx.compose.runtime.remember(listState) {
@@ -90,7 +93,8 @@ fun DsApp() {
         mutableStateListOf<Session>().also { it.addAll(Store.loadSessions(ctx)) }
     }
     var jumpToMessageId by remember { mutableStateOf(-1L) }
-    var currentId by remember { mutableStateOf(sessions.firstOrNull()?.id) }
+    // 启动态：null = 欢迎页（不自动进入上次对话，对齐官方"每次打开都是新对话"）
+    var currentId by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Msg?>(null) }
@@ -695,16 +699,20 @@ $$
                             },
                     ) {
                         if (shown == null) {
-                            // 没有会话：只保留底色
+                            // 启动时不再自动回到上次的对话：官方每次打开都是「空会话 + 欢迎页」。
+                            // 这里 currentId 初始为 null 也走同一个欢迎页，输入框在下方，发消息会新建会话。
                             Box(
                                 Modifier
                                     .fillMaxSize()
                                     .background(MaterialTheme.colorScheme.background)
-                            )
+                            ) {
+                                WelcomeScreen(onSuggestion = { input = it })
+                            }
                         } else {
                             val msgs = shown.messages
                             if (msgs.isEmpty()) {
-                                Welcome(onPick = { input = it })
+                                // 官方空会话欢迎页：鲸鱼 + 问候文案（WelcomeScreen 按官方 ChatWelcome 参数复刻）
+                                WelcomeScreen(onSuggestion = { input = it })
                             } else {
                                 MessageList(
                                     state = listState,
@@ -926,13 +934,25 @@ $$
                     Box(Modifier.weight(1f)) { mainContent() }
                 }
             } else {
+                // ── 窄屏（<768dp，A7 640×876dp 单栏）：官方 2.8.0 同机实测
+                //    （_work/shots/a11-off-01-chat.png 关闭 / a11-off-02-drawer.png 打开）
+                // 官方手机（compact）走 DSModalNavigationDrawer + ContentScrim（ModalNavigationDrawer.kt:284/463，
+                // smali Lmm7;->b / Lmm7;->a；动画 spring(dampingRatio=0.9f)，smali mm7:23 常量 0x3f666666）。
+                // 关键：**抽屉是整块平移、内容跟着平移，不是宽度动画/重排** ——
+                //   打开态 AI 正文墨迹 65px → 595px（+530px = +265dp），标题/居中的欢迎语同样 +530px；
+                //   把关闭态整体右移 530px 再叠 scrim 0.70 与打开态逐像素回归，mean|diff|=0.93 灰阶。
+                //   scrim 白 0.70 只盖内容栏（uiautomator 点击层 [530,0][1280,1752]），不盖抽屉。
+                // 实现见 PushDrawer.kt（平板走上面 wide 分支，一行不改）。
+                val drawerW = minOf(
+                    com.yuyuyu.deepseek.ui.theme.DsMetric.drawerWidthDp(maxWidth.value.toInt()).dp,
+                    maxWidth,
+                )
                 PushDrawer(
                     open = drawerOpen,
                     onClose = { drawerOpen = false },
-                    // 官方实测：抽屉 310.48dp（关?310.5 始）
-                    drawerWidth = minOf(com.yuyuyu.deepseek.ui.theme.DsMetric.DRAWER_W.dp, maxWidth),
-                    drawer = drawer,
-                    content = mainContent,
+                    drawerWidth = drawerW,
+                    drawer = { drawer() },
+                    content = { mainContent() },
                 )
             }
         }

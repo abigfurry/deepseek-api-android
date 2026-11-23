@@ -1,7 +1,6 @@
 package com.yuyuyu.deepseek.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -12,7 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,9 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -34,11 +32,27 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 /**
- * 对应官方 com.deepseek.chat.ui.components.drawer.DSNavigationDrawer：
- *  - 抽屉宽度 = min(326dp, 0.8 × 屏宽)（官方 NavigationDrawerDefaults.minimumContentWidth = 326f）
- *  - 内容随进度右移 drawerWidth、缩放到 1 - 0.0504p、圆角 36dp × p
- *  - 支持手指拖动跟手，松手按位置/速度吸附
- *  - 抽屉侧有 .drawerMask 遮罩层：只拦点击，不压暗（官方 open 时 opacity 归 0）
+ * 官方窄屏（手机 / compact，A7 640×876dp 单栏）modal 抽屉 —— 按官方 2.9.0 反编译实现：
+ *
+ *  官方代码出处：
+ *   · 组件：DSModalNavigationDrawer（ModalNavigationDrawer.kt:284，smali Lmm7;->b）
+ *     + ContentScrim（ModalNavigationDrawer.kt:463，smali Lmm7;->a）
+ *   · 动画 spec：`spring(dampingRatio = 0.9f)`（`smali/mm7.smali:23` const 0x3f666666=0.9f，
+ *     走 `Ll06;->W(FFLjava/lang/Object;I)` = Compose spring，stiffness 用默认 1500f）
+ *   · 进度函数：`smali/mm7.smali:4931` `c(FF)F` = clamp((offset + width)/width, 0, 1)
+ *     —— 即抽屉面板按 **translationX** 平移，不是宽度动画。
+ *
+ *  同机实测（官方 2.8.0 on A7，_work/shots/a11-off-01-chat.png 关闭 vs a11-off-02-drawer.png 打开）：
+ *   · 打开态内容整体**右移 265dp**（平移，不是按 375dp 重排）：
+ *     关闭态 AI 正文墨迹 x=65px、打开态 x=65+530=595px；标题、欢迎语（居中元素）同样 +530px。
+ *     把关闭态整幅右移 530px 再叠 scrim 0.70 与打开态逐像素回归，mean|diff| = 0.93 灰阶 → 平移成立。
+ *   · scrim 只盖内容栏（抽屉右侧），不盖抽屉：
+ *     浅色 = 白 0.70（正文最暗 25→186、输入卡描边 185→234 两点解出 S=255,a=0.70）；
+ *     深色 = #292929 0.53（深色欢迎页底 15→29、亮字 248→138 两点解出 S≈41,a≈0.53）。
+ *   · 抽屉右缘有内容层投下的阴影（x=471..529px，255→239），≈18dp elevation；无模糊。
+ *   · 官方 2.8.0/2.9.0 在 640dp 窗口下抽屉宽 265dp（uiautomator 关闭层 [530,0][1280,1752]）。
+ *
+ * 平板（≥768dp）走 DsApp.kt 的 wide 两栏分支，不使用本文件。
  */
 @Composable
 fun PushDrawer(
@@ -49,7 +63,8 @@ fun PushDrawer(
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
-    // 官方：横屏时抽屉不能拖动，只能点左上角按钮
+    val dark = isSystemInDarkTheme()
+    // 官方：横屏（手机被强制竖屏，这里只是兜底）时抽屉不能拖动，只能点左上角按钮
     val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val widthPx = with(density) { drawerWidth.toPx() }
@@ -59,16 +74,19 @@ fun PushDrawer(
     LaunchedEffect(open) {
         progress.animateTo(
             targetValue = if (open) 1f else 0f,
-            // 官方 DSModalNavigationDrawer：spring(dampingRatio = 0.9f, stiffness = 1500f)
-        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 1500f),
+            // 官方 DSModalNavigationDrawer：spring(dampingRatio = 0.9f)（smali mm7 <clinit> 0.9f，默认 1500f）
+            animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 1500f),
         )
     }
 
     var dragging by remember { mutableStateOf(false) }
     val p = progress.value
+    // 官方 scrim：浅色 白 0.70、深色 #292929 0.53（同机像素反解，见文件头）
+    val scrimColor = if (dark) Color(0xFF292929) else MaterialTheme.colorScheme.background
+    val scrimAlpha = if (dark) 0.53f else 0.70f
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // 抽屉本体：跟着内容一起从左边划出来（官方是整体平移，不是被内容"揭开"）
+        // 抽屉面板：整块从 -drawerWidth 平移到 0（官方 translationX，不是宽度动画）
         Box(
             Modifier
                 .width(drawerWidth)
@@ -80,12 +98,11 @@ fun PushDrawer(
             drawer()
         }
 
-        // 内容层：跟手位移 + 缩放 + 圆角
+        // 内容层：整体右移 drawerWidth × 进度（官方实测：打开态内容平移 265dp，不重排）
         Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    // 官方：侧边栏打开时对话内容整体右移，不缩放、不变圆角（实测左边缘是直边）
                     translationX = widthPx * p
                 }
                 .then(if (isLandscape) Modifier else Modifier.draggable(
@@ -114,26 +131,26 @@ fun PushDrawer(
             Box(
                 Modifier
                     .fillMaxSize()
-                    // 官方：内容层左边缘投一条 #EFEFEF→#FDFDFD 的阴影到抽屉上，但边缘本身是直的
-                    .shadow(elevation = 24.dp * p, shape = RectangleShape, clip = false)
-                    // 官方：缓慢拖动抽屉时，对话层会随位移逐渐模糊
-                    .blur(radius = 3.dp * p)
+                    // 官方：内容层左缘往抽屉上投阴影（实测 255→239，宽约 29.5dp，无模糊）
+                    .shadow(elevation = 18.dp * p, shape = RectangleShape, clip = false)
                     .background(MaterialTheme.colorScheme.background)
             ) {
                 content()
             }
-            // .drawerMask：只在打开态拦截点击，视觉透明
-            if (p > 0.001f) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Transparent)
-                        .clickable(
+            // 官方 ContentScrim：只盖内容层（不盖抽屉），颜色/alpha 见上，随进度淡入；点一下关闭。
+            // 关闭态（open=false）不挂 clickable —— 否则透明 scrim 会挡住顶栏汉堡/正文里的所有点击。
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = scrimAlpha * p }
+                    .background(scrimColor)
+                    .then(
+                        if (open) Modifier.clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() },
-                        ) { onClose() }
-                )
-            }
+                        ) { onClose() } else Modifier
+                    )
+            )
         }
     }
 }

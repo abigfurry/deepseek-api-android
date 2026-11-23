@@ -93,6 +93,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.yuyuyu.deepseek.R
 import com.yuyuyu.deepseek.data.Msg
+import com.yuyuyu.deepseek.ui.theme.DsLayout
 import com.yuyuyu.deepseek.ui.theme.DsMetric
 import com.yuyuyu.deepseek.ui.theme.DsBlue
 import com.yuyuyu.deepseek.ui.theme.LocalDsColors
@@ -148,13 +149,14 @@ fun TopBar(
         Modifier
             .fillMaxWidth()
             // 官方：顶栏 = 内容行 45dp + 上留白 6dp（状态栏 24dp 以下共 51dp）—— 实测 audit-chat.png
-            .padding(start = DsMetric.TOP_BAR_PAD_START.dp, top = DsMetric.TOP_BAR_TOP_PAD.dp)
-            .height(DsMetric.TOP_BAR_H.dp),
+            // 窄屏（640dp）官方 2.8.0 实测：内容行 39 + 上留白 3.5（a11-off-10-empty：chat_top_bar 22..64.5）
+            .padding(start = DsMetric.topBarPadStart.dp, top = DsMetric.topBarTopPad.dp)
+            .height(DsMetric.topBarH.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
-                .size(DsMetric.TOP_ICON_BOX.dp)
+                .size(DsMetric.topIconBox.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onMenu),
             contentAlignment = Alignment.Center,
@@ -163,7 +165,7 @@ fun TopBar(
                 painter = painterResource(R.drawable.ic_menu_outline_24),
                 contentDescription = "打开侧边栏",
                 tint = ds.bodyText,
-                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+                modifier = Modifier.size(DsMetric.topIcon.dp),
             )
         }
         if (title.isNotBlank()) {
@@ -172,10 +174,11 @@ fun TopBar(
                 modifier = Modifier
                     .weight(1f)
                     // 官方：标题 x=57dp（汉堡盒 2.5+45=47.5，间隔 9.5）—— ui-official-chatclosed.xml
-                    .padding(start = 9.5.dp, end = 6.dp),
+                    // 窄屏：盒右缘 41 → 标题墨迹 49.5（间隔 8.5）
+                    .padding(start = DsMetric.topTitlePadStart.dp, end = 6.dp),
                 // 官方：16sp、节点高 20dp、Medium~SemiBold —— 实测 audit-chat.png
                 fontSize = 16.sp,
-                lineHeight = 20.sp,
+                lineHeight = if (DsLayout.narrow) 21.sp else 20.sp,
                 fontWeight = FontWeight.Medium,
                 color = ds.bodyText,
                 maxLines = 1,
@@ -186,7 +189,7 @@ fun TopBar(
         }
         Box(
             Modifier
-                .size(DsMetric.TOP_ICON_BOX.dp)
+                .size(DsMetric.topIconBox.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onMute),
             contentAlignment = Alignment.Center,
@@ -197,14 +200,14 @@ fun TopBar(
                 ),
                 contentDescription = if (autoRead) "关闭自动朗读" else "开启自动朗读",
                 tint = if (autoRead) DsBlue else ds.bodyText,
-                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+                modifier = Modifier.size(DsMetric.topIcon.dp),
             )
         }
         // 官方：两个右按钮间距 4dp，新对话按钮右缘贴屏幕右边 —— ui-official-chatclosed.xml
-        Spacer(Modifier.width(DsMetric.TOP_ICON_GAP.dp))
+        Spacer(Modifier.width(DsMetric.topIconGap.dp))
         Box(
             Modifier
-                .size(DsMetric.TOP_ICON_BOX.dp)
+                .size(DsMetric.topIconBox.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onNewChat),
             contentAlignment = Alignment.Center,
@@ -213,7 +216,7 @@ fun TopBar(
                 painter = painterResource(R.drawable.ic_new_chat_outline_24),
                 contentDescription = "开启新对话",
                 tint = ds.bodyText,
-                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+                modifier = Modifier.size(DsMetric.topIcon.dp),
             )
         }
     }
@@ -307,7 +310,8 @@ fun MessageList(
     LazyColumn(
         state = state,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 8.dp),
+        // 窄屏：官方第一条消息气泡顶 = 82.5（顶栏底 64.5 之后 20）
+        contentPadding = PaddingValues(top = if (DsLayout.narrow) 20.dp else 12.dp, bottom = 8.dp),
     ) {
         items(messages, key = { it.id }) { m ->
             // 正在流式的那一条：把 StreamUi 里的实时文本叠加进来。
@@ -396,9 +400,14 @@ private fun MessageRow(
             )
     ) {
         val paneW = maxWidth
-        val bodyPad = if (wideWindow) bodyPadX(paneW) else DsMetric.MSG_PAD_X.dp
+        // 窄屏（640dp 单栏）官方 2.8.0 实测：正文列左右内边距 32.5dp（正文墨迹 33、右缘 607.5），
+        // 用户气泡右内边距 26.5dp（气泡右缘 613.5）—— 见 DsMetric.msgPadX / bubbleEndPad。
+        // 宽屏仍走 bodyPadX()（800dp→62.5、双栏 pane 494→38.5）。
+        val bodyPad = if (DsLayout.narrow) DsMetric.msgPadX.dp
+        else if (wideWindow) bodyPadX(paneW) else DsMetric.MSG_PAD_X.dp
         // 气泡右内边距跟着正文列右缘走：单栏仍是 55dp（= 原来的 BUBBLE_RIGHT），两栏 31dp。
-        val bubbleEnd = if (wideWindow) bubbleEndPad(bodyPad) else DsMetric.BUBBLE_RIGHT.dp
+        val bubbleEnd = if (DsLayout.narrow) DsMetric.bubbleEndPad.dp
+        else if (wideWindow) bubbleEndPad(bodyPad) else DsMetric.BUBBLE_RIGHT.dp
         DsSelectionToolbarHost(messageText = m.text) {
         if (m.role == "user") {
             Row(
@@ -406,7 +415,7 @@ private fun MessageRow(
                     .fillMaxWidth()
                     // 官方：单栏气泡右缘 x=745（距屏幕右 55dp）、与下一条间距 13dp —— 实测 audit-chat.png；
                     // 两栏气泡右缘 769.5dp（距 pane 右 30.5dp）。右内边距由 bubbleEndPad 推出来。
-                    .padding(start = 60.dp, end = bubbleEnd, bottom = DsMetric.MSG_GAP_Y.dp),
+                    .padding(start = 60.dp, end = bubbleEnd, bottom = DsMetric.msgGapY.dp),
                 horizontalArrangement = Arrangement.End,
             ) {
                 Column(horizontalAlignment = Alignment.End) {
@@ -423,10 +432,10 @@ private fun MessageRow(
                             color = ds.userBubble,
                             // 官方：用户气泡圆角 ≈20.5dp（拟合 20.46，取 20）—— 实测 audit-chat.png
                             shape = RoundedCornerShape(
-                                topStart = DsMetric.BUBBLE_RADIUS.dp,
-                                topEnd = DsMetric.BUBBLE_RADIUS.dp,
-                                bottomEnd = DsMetric.BUBBLE_RADIUS.dp,
-                                bottomStart = DsMetric.BUBBLE_RADIUS.dp,
+                                topStart = DsMetric.bubbleRadius.dp,
+                                topEnd = DsMetric.bubbleRadius.dp,
+                                bottomEnd = DsMetric.bubbleRadius.dp,
+                                bottomStart = DsMetric.bubbleRadius.dp,
                             ),
                         ) {
                             MaybeSelect(selecting) {
@@ -434,8 +443,8 @@ private fun MessageRow(
                                     text = m.text,
                                     // 官方：内边距 水平 15 / 垂直 9.5 —— ui (245,215)-(1460,607)
                                     modifier = Modifier.padding(
-                                        horizontal = DsMetric.BUBBLE_PAD_H.dp,
-                                        vertical = DsMetric.BUBBLE_PAD_V.dp,
+                                        horizontal = DsMetric.bubblePadH.dp,
+                                        vertical = DsMetric.bubblePadV.dp,
                                     ),
                                     // 官方：17sp / 26sp、字重 Normal —— kt:UserChatMessageBubble.kt:214
                                     fontSize = DsMetric.BODY_SIZE.sp,
@@ -457,7 +466,7 @@ private fun MessageRow(
                     .padding(
                         start = bodyPad,
                         end = bodyPad,
-                        top = DsMetric.MSG_GAP_Y.dp,
+                        top = DsMetric.msgGapY.dp,
                     )
             ) {
                 if (m.reasoning.isNotBlank() || m.steps.isNotEmpty() || (m.streaming && m.text.isBlank())) {
@@ -959,11 +968,14 @@ private fun ActionRow(
     Row(
         Modifier
             // 官方：操作行左右各外扩 13dp —— 49.5 / 750.5 vs 正文 62.5 / 737.5
-            .expandHorizontal(DsMetric.ACTION_PAD_START.dp)
+            // 窄屏（640dp）官方 2.8.0 实测：外扩 11.25、再右缩 5.25（首图标墨迹 35 ≈ 正文墨迹 33；行盒 21.25..618.75）
+            .expandHorizontal(if (DsLayout.narrow) DsMetric.actionPadStart.dp else DsMetric.ACTION_PAD_START.dp)
             .fillMaxWidth()
             // 官方：AI 声明与操作行间距 4.5dp —— ui 739 → 743.5
+            .padding(start = DsMetric.actionLeadIn.dp)
             .padding(top = DsMetric.ACTION_TOP.dp)
-            .height(DsMetric.ACTION_H.dp),
+            .height(DsMetric.actionH.dp)
+            .offset(x = DsMetric.actionShift.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (variantCount > 1) {
@@ -981,7 +993,7 @@ private fun ActionRow(
         ActionCell(R.drawable.ic_share_outline_20, "分享", onClick = onShare)
         Spacer(Modifier.weight(1f))
         // 官方「重新生成」单元格 45dp、贴右缘（x=705.5…750.5）
-        ActionCell(R.drawable.ic_refresh_outline_20, "重新生成", w = 45.dp, onClick = onRegenerate)
+        ActionCell(R.drawable.ic_refresh_outline_20, "重新生成", w = DsMetric.actionRegenCell.dp, onClick = onRegenerate)
     }
 }
 
@@ -1003,12 +1015,12 @@ private fun Modifier.expandHorizontal(by: Dp): Modifier = this.layout { measurab
 }
 
 @Composable
-private fun ActionCell(icon: Int, label: String, w: Dp = DsMetric.ACTION_CELL.dp, onClick: () -> Unit) {
+private fun ActionCell(icon: Int, label: String, w: Dp = DsMetric.actionCell.dp, onClick: () -> Unit) {
     val ds = LocalDsColors.current
     Box(
         Modifier
             // 官方：操作行单元格 38×45dp、图标 19dp —— ui-official-chatclosed.xml
-            .size(w, DsMetric.ACTION_H.dp)
+            .size(w, DsMetric.actionH.dp)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -1016,7 +1028,7 @@ private fun ActionCell(icon: Int, label: String, w: Dp = DsMetric.ACTION_CELL.dp
             painter = painterResource(icon),
             contentDescription = label,
             tint = ds.iconGray,
-            modifier = Modifier.size(DsMetric.ACTION_ICON.dp),
+            modifier = Modifier.size(DsMetric.actionIcon.dp),
         )
     }
 }
@@ -1041,7 +1053,7 @@ private fun VariantControls(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
-                .size(34.dp, DsMetric.ACTION_H.dp)
+                .size(34.dp, DsMetric.actionH.dp)
                 .clip(CircleShape)
                 .clickable(enabled = canPrev, onClick = onPrev),
             contentAlignment = Alignment.Center,
@@ -1065,7 +1077,7 @@ private fun VariantControls(
         }
         Box(
             Modifier
-                .size(34.dp, DsMetric.ACTION_H.dp)
+                .size(34.dp, DsMetric.actionH.dp)
                 .clip(CircleShape)
                 .clickable(enabled = canNext, onClick = onNext),
             contentAlignment = Alignment.Center,
@@ -1408,7 +1420,7 @@ private fun TtsActionCell(msgId: Long, onClick: () -> Unit) {
     Box(
         Modifier
             // 官方：朗读单元格与其它操作行一致 38×45dp、图标 19dp —— ui-official-chatclosed.xml
-            .size(DsMetric.ACTION_CELL.dp, DsMetric.ACTION_H.dp)
+            .size(DsMetric.actionCell.dp, DsMetric.actionH.dp)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -1421,7 +1433,7 @@ private fun TtsActionCell(msgId: Long, onClick: () -> Unit) {
                     animationSpec = infiniteRepeatable(tween(800, easing = androidx.compose.animation.core.LinearEasing)),
                     label = "sweep",
                 )
-                Canvas(Modifier.size(DsMetric.ACTION_ICON.dp)) {
+                Canvas(Modifier.size(DsMetric.actionIcon.dp)) {
                     val w = size.width
                     val h = size.height
                     val cx = w / 2f
@@ -1458,7 +1470,7 @@ private fun TtsActionCell(msgId: Long, onClick: () -> Unit) {
                     label = "wave",
                 )
                 Row(
-                    Modifier.size(DsMetric.ACTION_ICON.dp),
+                    Modifier.size(DsMetric.actionIcon.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1481,7 +1493,7 @@ private fun TtsActionCell(msgId: Long, onClick: () -> Unit) {
                     painter = painterResource(R.drawable.ic_play_media_outline_20),
                     contentDescription = "朗读",
                     tint = ds.iconGray,
-                    modifier = Modifier.size(DsMetric.ACTION_ICON.dp),
+                    modifier = Modifier.size(DsMetric.actionIcon.dp),
                 )
             }
         }

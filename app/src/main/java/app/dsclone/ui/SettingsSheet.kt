@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -55,6 +57,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -76,6 +79,8 @@ import com.yuyuyu.deepseek.data.appearanceLabel
 import com.yuyuyu.deepseek.data.languageLabel
 import com.yuyuyu.deepseek.ui.theme.DsAppearance
 import com.yuyuyu.deepseek.ui.theme.DsBlue
+import com.yuyuyu.deepseek.ui.theme.DsLayout
+import com.yuyuyu.deepseek.ui.theme.DsMetric
 import com.yuyuyu.deepseek.ui.theme.LocalDsColors
 import kotlinx.coroutines.delay
 
@@ -99,21 +104,27 @@ import kotlinx.coroutines.delay
  */
 
 // ===== 实测尺寸常量 =====
-private val MainMargin = 40.dp
+// 窄屏（640dp 单栏）官方 2.8.0 同机实测：卡片外边距 15、行高 39、圆角 12、图标 21
+// （a11-off-13-settings-dark.xml：卡片 15..625、行文字 y 100.5/139.5/… 间距 39）
+// 宽屏继续用平板实测值（DsMetric.setXxx 内部按 DsLayout.narrow 分支）。
+private val MainMargin: Dp get() = DsMetric.setMargin.dp
 private val NarrowMargin = 15.dp
-private val RowH = 45.dp
-private val CardR = 14.dp
-private val IconInset = 15.dp
-private val IconBox = 24.dp
-private val IconGap = 8.dp
-private val EndPad = 12.dp
+private val RowH: Dp get() = DsMetric.setRowH.dp
+private val CardR: Dp get() = DsMetric.setRadius.dp
+private val IconInset: Dp get() = DsMetric.setIconInset.dp
+private val IconBox: Dp get() = DsMetric.setIcon.dp
+private val IconGap: Dp get() = DsMetric.setIconGap.dp
+private val EndPad: Dp get() = DsMetric.setEndPad.dp
 private val ChevronBox = 20.dp
-private val HeadTop = 26.5.dp
-private val HeadBottom = 7.5.dp
-private val FirstTop = 9.5.dp
-private val SectionGap = 34.dp
+private val HeadTop: Dp get() = DsMetric.setHeadTop.dp
+private val HeadBottom: Dp get() = DsMetric.setHeadBottom.dp
+private val FirstTop: Dp get() = DsMetric.setFirstTop.dp
+private val SectionGap: Dp get() = DsMetric.setSectionGap.dp
 
 private val TitleSize = 16.sp
+private val TitleLineH: androidx.compose.ui.unit.TextUnit get() = DsMetric.setTitleLineH.sp
+private val ItemLineH: androidx.compose.ui.unit.TextUnit get() = DsMetric.setItemLineH.sp
+private val HeadLineH: androidx.compose.ui.unit.TextUnit get() = DsMetric.setHeadLineH.sp
 private val ItemSize = 16.sp
 private val ValueSize = 16.sp
 private val HeadSize = 12.sp
@@ -207,14 +218,15 @@ fun SettingsSheet(
     // 音色接到 DsTts（不动 DsTts.kt，只读它的公开 var）
     LaunchedEffect(Unit) { DsTts.voiceId = initial.voiceId.ifBlank { "stella" } }
 
-    // 官方进设置页是从右侧滑入 + 淡入，退出去是向右滑出 + 淡出；进出对称 220ms，
+    // 官方进设置页是从右侧滑入 + 淡入，退出去是向右滑出 + 淡出；
+    // 官方 2.8.0 同机 screenrecord 实测（1x，逐帧）：位移段 1.521s→1.801s ≈ 280ms，进出对称。
     // 缓动统一 FastOutSlowInEasing（Material 推荐曲线）。
     // 关键：驱动方式改成 rememberFrameAnim（withFrameNanos 逐帧累计），不再用 Animatable。
     // Animatable 的时长会乘系统「动画时长缩放」（部分 ROM 的「移除动画」会把它直接设成 0），
     // 缩放=0 时设置页会一帧跳出来；逐帧驱动自己算时间，不受这个缩放影响。
     var closing by remember { mutableStateOf(false) }
     val enterProgress = rememberFrameAnim(
-        durationMs = 220,
+        durationMs = 280,
         trigger = closing,
         onFinished = { if (closing) onSave(s) },
     )
@@ -229,7 +241,7 @@ fun SettingsSheet(
     //  系统「动画时长缩放=0」时会直接跳变）。
     //   push（进子页）：新页从右 12% 滑入 + 淡入，旧页向左 4% 滑出 + 淡出
     //   pop（返回）：当前页向右 12% 滑出 + 淡出，上一页从左侧 4% 淡入
-    // 时长/曲线与原来一致：220ms / FastOutSlowInEasing。
+    // 时长：280ms（官方 2.8.0 同机 screenrecord 实测）；曲线 FastOutSlowInEasing。
     // 用 (当前页面, 栈深度) 做 key：page 为 null 表示主设置页；深度变化决定 push/pop 方向。
     val pageState: Pair<String?, Int> = stack.lastOrNull() to stack.size
     var prevEntry by remember { mutableStateOf<SettingsPageEntry?>(null) }
@@ -237,7 +249,7 @@ fun SettingsSheet(
     // 过渡是否已经跑完：只在开始/结束各触发一次重组，进度本身在 graphicsLayer 里读。
     var transitionDone by remember { mutableStateOf(true) }
     val pageProgress = rememberFrameAnim(
-        durationMs = 220,
+        durationMs = 280,
         trigger = pageState,
         startAtEnd = true,
         onFinished = { transitionDone = true },
@@ -273,6 +285,18 @@ fun SettingsSheet(
         onDismissRequest = dismissOrPop,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // 设置页本身是一个独立 Dialog 窗口（decorFitsSystemWindows=false）：系统栏图标的明暗
+        // 必须在这个窗口上单独设。否则「深色→浅色」切换后状态栏还是浅色图标 = 白底白字。
+        val settingsView = LocalView.current
+        val settingsDark = ds.settingsPage.luminance() < 0.5f
+        SideEffect {
+            val win = (settingsView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+                ?: return@SideEffect
+            androidx.core.view.WindowCompat.getInsetsController(win, settingsView).apply {
+                isAppearanceLightStatusBars = !settingsDark
+                isAppearanceLightNavigationBars = !settingsDark
+            }
+        }
         Column(
             Modifier
                 .fillMaxSize()
@@ -283,7 +307,7 @@ fun SettingsSheet(
                     alpha = v
                     translationX = (1f - v) * size.width * 0.20f
                 }
-                .background(ds.pageBg)
+                .background(ds.settingsPage)
         ) {
             SettingsTopBar(
                 title = if (stack.isEmpty()) "设置" else settingsPageTitle(stack.last()),
@@ -499,18 +523,23 @@ fun SettingsSheet(
 @Composable
 private fun SettingsTopBar(title: String, onBack: () -> Unit) {
     val ds = LocalDsColors.current
-    Box(Modifier.fillMaxWidth().statusBarsPadding().height(45.dp)) {
+    // 窄屏：官方顶栏行 36.5dp、返回圆钮 39（图标 16.5，圆心 x=24.75 / y=40.25）
+    val barH = if (DsLayout.narrow) 36.5.dp else 45.dp
+    val backBox = if (DsLayout.narrow) 39.dp else 45.dp
+    val backPad = if (DsLayout.narrow) 5.25.dp else 6.dp
+    val backIcon = if (DsLayout.narrow) 16.5.dp else 19.dp
+    Box(Modifier.fillMaxWidth().statusBarsPadding().height(barH)) {
         Box(
             Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 6.dp)
-                .size(45.dp)
+                .padding(start = backPad)
+                .size(backBox)
                 .clip(CircleShape)
                 .background(ds.backCircle)
                 .clickable(onClick = onBack),
             contentAlignment = Alignment.Center,
         ) {
-            DsIcon("back", 19.dp, ds.rowText)
+            DsIcon("back", backIcon, ds.rowText)
         }
         androidx.compose.animation.Crossfade(
             targetState = title,
@@ -524,6 +553,7 @@ private fun SettingsTopBar(title: String, onBack: () -> Unit) {
             Text(
                 text = t,
                 fontSize = TitleSize,
+                lineHeight = TitleLineH,
                 fontWeight = FontWeight.Medium,
                 color = ds.rowText,
             )
@@ -652,7 +682,7 @@ internal fun DsGroupHeader(text: String, margin: Dp = MainMargin, topGap: Dp = H
     Text(
         text = text,
         fontSize = HeadSize,
-        lineHeight = 17.sp,
+        lineHeight = HeadLineH,
         color = ds.secondary,
         modifier = Modifier
             .fillMaxWidth()
@@ -672,7 +702,7 @@ internal fun DsCard(
             .fillMaxWidth()
             .padding(start = margin, end = margin, top = topGap)
             .clip(RoundedCornerShape(CardR))
-            .background(ds.cardBg),
+            .background(ds.settingsCard),
         content = content,
     )
 }
@@ -704,6 +734,7 @@ internal fun SettingRow(
         Text(
             text = label,
             fontSize = ItemSize,
+            lineHeight = ItemLineH,
             color = labelColor ?: ds.rowText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -713,6 +744,7 @@ internal fun SettingRow(
             Text(
                 text = value,
                 fontSize = ValueSize,
+                lineHeight = ItemLineH,
                 color = valueColor ?: ds.secondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -724,8 +756,9 @@ internal fun SettingRow(
             trailing()
         }
         if (chevron) {
-            Spacer(Modifier.width(if (value != null || trailing != null) 4.dp else 0.dp))
-            DsIcon("chevron", ChevronBox, ds.chevron)
+            // 窄屏：官方值文字右缘 599.5 = 卡右 626.5 − 12(EndPad) − 15(箭头盒)，且值到箭头之间无额外间距
+            Spacer(Modifier.width(if (DsLayout.narrow) 0.dp else if (value != null || trailing != null) 4.dp else 0.dp))
+            DsIcon("chevron", if (DsLayout.narrow) 15.dp else ChevronBox, ds.chevron)
         }
     }
 }

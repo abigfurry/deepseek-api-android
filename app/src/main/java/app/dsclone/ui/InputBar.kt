@@ -73,6 +73,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.yuyuyu.deepseek.R
 import com.yuyuyu.deepseek.ui.theme.DsBlue
+import com.yuyuyu.deepseek.ui.theme.DsLayout
 import com.yuyuyu.deepseek.ui.theme.DsMetric
 import com.yuyuyu.deepseek.ui.theme.LocalDsColors
 
@@ -98,7 +99,8 @@ private fun Chip(
 ) {
     val ds = LocalDsColors.current
     // 官方 chip：药丸高 30dp、圆角 15dp（胶囊）—— 实测 audit-chat.png mask bbox y 2002..2061px
-    val shape = RoundedCornerShape(DsMetric.CHIP_RADIUS.dp)
+    // 窄屏（640dp）官方 2.8.0 实测：药丸 80×26、圆角 13、字号 ≈14sp、图标 13
+    val shape = RoundedCornerShape(DsMetric.chipRadius.dp)
     // ── 官方逐像素实测（audit-chat.png / audit-dark-chat.png，1600×2176 @density2，px÷2=dp）──
     //   药丸视觉盒 93.5×30dp（bbox x 126..313px、y 2002..2061px）、圆角=高/2（胶囊）、1dp 描边
     //   选中浅：#EDF3FE 底 / #D3E2FF 描边 / #426EFE 图标+文字（药丸内取色）
@@ -133,13 +135,13 @@ private fun Chip(
     )
     // 官方图标墨迹 14dp（audit-chat.png chip1 图标墨迹 x150..177 = 28px）。
     // 本工程 lottie/矢量资产的墨迹/盒比 ≈ 0.9375 → 15dp 盒渲染 14.06dp 墨迹。
-    val iconSize = 15f
+    val iconSize = DsMetric.chipIcon
     // 官方 pill：宽 93.5dp（实测 x 126..313px = 63..156.5dp）、高 30dp，两颗之间 8dp，
     // 内容水平居中（官方图标墨迹左缘距药丸左 12.5dp、文字右缘距药丸右 12dp）。
     Row(
         Modifier
-            .width(tapWidth)
-            .height(DsMetric.CHIP_H.dp)
+            .width(if (DsLayout.narrow) DsMetric.chipW.dp else tapWidth)
+            .height(DsMetric.chipH.dp)
             .clip(shape)
             .border(1.dp, borderCol, shape)
             .background(fill)
@@ -207,7 +209,7 @@ private fun Chip(
                         )
                     }
                 }
-                Spacer(Modifier.width(4.1.dp))
+                Spacer(Modifier.width(DsMetric.chipIconGap.dp))
             } else if (icon != 0) {
                 Icon(
                     painter = painterResource(icon),
@@ -215,13 +217,13 @@ private fun Chip(
                     tint = iconCol,
                     modifier = Modifier.size(iconSize.dp),
                 )
-                Spacer(Modifier.width(4.1.dp))
+                Spacer(Modifier.width(DsMetric.chipIconGap.dp))
             }
         Text(
             text = text,
             // 官方实测：字符起点差 13.0dp、4 字墨迹 50.5dp → 13sp（原 14sp 偏大）
-            fontSize = 13.sp,
-            lineHeight = 19.43.sp,
+            fontSize = DsMetric.chipTextSize.sp,
+            lineHeight = DsMetric.chipLineH.sp,
             // 官方 chip 文字墨迹覆盖率比 Normal 多约 29%（928 vs 719）→ Medium(500)
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -349,22 +351,21 @@ fun InputBar(
         // 双栏（pane 494dp）实测卡 x 646..1565px = 323..783dp、宽 460dp、两侧各 17dp。
         // 反推：卡宽 = min(697, pane − 2×17)，且居中 → 单栏 (800−697)/2 = 51.5 ✓、双栏 (494−460)/2 = 17 ✓。
         // 所以外侧总边距必须恰好 17dp（不是 12.2+5=17.2，否则双栏卡宽 459.6dp，卡边会差 1px）。
-        val outerPad = 12.dp
+        // 窄屏：官方卡 bbox 18..622（宽 604 = 640-36）
+        val outerPad = DsMetric.cardMarginX.dp
         // 与 Surface 里原有逻辑保持一致：以**窗口**宽判断是否平板（两栏时 pane 可能 <600 但窗口 >600）
-        val sidePad = if (
-            androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
-        ) 0.dp else 5.dp
+        val sidePad = if (DsLayout.narrow || androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600) 0.dp else 5.dp
         // 卡片始终在 pane 内水平居中 → 卡左 = (paneW − cardW)/2
         val cardW = minOf(DsMetric.CARD_MAX_W.dp, paneW - (outerPad + sidePad) * 2f)
         // 卡片外框有 1dp 描边，官方内容（行）整体再内缩 1dp：卡外框 y 1885..2085px=100dp，
         // 内容区 y 1887..2083px=98dp；水平方向同理（chip 左缘 63dp = 卡左 51.5+1+10.5）。
         // chip 起点固定为「卡片内容左缘 + 10.5dp」（单栏 51.5+1+10.5=63 ✓、双栏 323+1+10.5=334.5 ✓），
         // 不再按正文列反推 —— 双栏时正文列 38.5dp 与 chip 起点不是同一条线（官方 chip 在卡内固定 10.5dp）。
-        val chipStartPad = 10.5.dp
+        val chipStartPad = DsMetric.chipStartPad.dp
         // 右侧图标组：官方 ⊕ 墨迹 23.5dp、麦克风墨迹 23.5dp；⊕ 墨迹中心 678.5dp、
         // 麦克风墨迹中心 720dp（单栏），双栏 713 / 754.5dp —— 两栏都满足：
         //   麦克风盒（25dp）右缘 = 卡内容右缘 − 15dp；⊕ 盒右缘 = 麦克风盒左缘 − 16.5dp。
-        val iconEndPad = 15.dp
+        val iconEndPad = DsMetric.inputIconEndPad.dp
         Column(
             Modifier
                 .fillMaxWidth()
@@ -418,7 +419,7 @@ fun InputBar(
                 .fillMaxWidth()
                 .shadow(
                     elevation = 16.dp,
-                    shape = RoundedCornerShape(DsMetric.CARD_RADIUS.dp),
+                    shape = RoundedCornerShape(DsMetric.cardRadius.dp),
                     clip = false,
                     // Compose/RenderNode 会把颜色 alpha 再乘一个很低的系数（实测 0x0E → 只压暗 2 灰阶），
                     // 这里按实测比例放大到 0x5C，目标是与官方一致：底边往下 255→241、拖尾 20dp。
@@ -427,7 +428,7 @@ fun InputBar(
                     spotColor = Color(if (ds.cardBg.luminance() > 0.5f) 0x44000000 else 0x1A000000),
                 ),
                 // 圆角 ≈24.8dp（拟合 24.83，取 25）—— 实测 audit-chat.png 卡顶左角
-            shape = RoundedCornerShape(DsMetric.CARD_RADIUS.dp),
+            shape = RoundedCornerShape(DsMetric.cardRadius.dp),
             color = ds.cardBg,
             // 官方浅色输入卡 1dp #F0F0F0 边框（实测 audit-chat.png 列扫描 x=800 卡顶/卡底边框行）；
             // 深色用主题里的 inputCardBorder(#333333)，不能写死浅色，否则深色下是一圈白框。
@@ -449,13 +450,14 @@ fun InputBar(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 46.dp)
+                        .heightIn(min = DsMetric.cardInputRowH.dp)
                         .padding(
                             // 官方占位符墨迹左缘 136px=68dp：卡左 51.5 + 描边 1 + 内边距 15 + 字形留白 0.5
-                            start = 15.dp,
-                            end = 15.dp,
-                            top = 11.3.dp,
-                            bottom = 8.7.dp,
+                            // 窄屏：占位符墨迹 32 = 卡 18 + 描边 1 + 13
+                            start = DsMetric.cardPadH.dp,
+                            end = DsMetric.cardPadH.dp,
+                            top = DsMetric.cardInputPadTop.dp,
+                            bottom = DsMetric.cardInputPadBottom.dp,
                         ),
                 ) {
                     if (voiceMode) {
@@ -463,7 +465,7 @@ fun InputBar(
                         // 墨迹实测 x 1045..1167px = 61.5dp（4 字，推进 30.75px）、y 1921..1951；
                         // 颜色 (25,27,35)=#191B23（= ds.bodyText），不是灰色占位色。
                         Box(
-                            Modifier.fillMaxWidth().heightIn(min = 26.dp),
+                            Modifier.fillMaxWidth().heightIn(min = DsMetric.cardTextFieldMinH.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -485,7 +487,7 @@ fun InputBar(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(fieldFocus)
-                                .heightIn(min = 26.dp),
+                                .heightIn(min = DsMetric.cardTextFieldMinH.dp),
                             // 输入正文官方 17sp / 26sp / 字重 Normal —— kt:ChatInputField.kt:105
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
                                 fontSize = DsMetric.BODY_SIZE.sp,
@@ -604,7 +606,7 @@ fun InputBar(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .height(51.dp)
+                        .height(DsMetric.cardActionRowH.dp)
                         .padding(start = chipStartPad, end = iconEndPad),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -624,7 +626,7 @@ fun InputBar(
                     // ⊕：盒 25dp（矢量墨迹/盒 ≈0.9375 → 墨迹 23.4dp）；官方墨迹 x 1334..1380 / 1403..1449
                     Box(
                         Modifier
-                            .width(25.dp)
+                            .width(DsMetric.inputIconBox.dp)
                             .fillMaxHeight()
                             .clickable(onClick = onAddAttachment),
                         contentAlignment = Alignment.Center,
@@ -635,15 +637,15 @@ fun InputBar(
                             ),
                             contentDescription = if (attachOpen) "关闭" else "上传文件",
                             tint = ds.inputIcon,
-                            modifier = Modifier.size(24.6.dp),
+                            modifier = Modifier.size(DsMetric.inputIconSize.dp),
                         )
                     }
-                    Spacer(Modifier.width(16.5.dp))
+                    Spacer(Modifier.width(DsMetric.inputIconGap.dp))
                     // 发送 / 麦克风：盒 25dp，中心 = 内容右缘 − 15 − 12.5 = 内容右 − 27.5dp
                     // （单栏 747.5−27.5 = 720dp ✓ 官方墨迹中心；双栏 782−27.5 = 754.5dp ✓）
                     Box(
                         Modifier
-                            .width(25.dp)
+                            .width(DsMetric.inputIconBox.dp)
                             .fillMaxHeight()
                             .clickable {
                                 if (sending) onStop()
@@ -660,7 +662,7 @@ fun InputBar(
                             // 发送态没有官方截图可对照，保持原有蓝色圆钮（28.57dp，居中在同一个 25dp 盒里）
                             Box(
                                 Modifier
-                                    .size(28.57.dp)
+                                    .size(DsMetric.sendBtnSize.dp)
                                     .clip(CircleShape)
                                     .background(DsBlue)
                                     .clickable {
@@ -687,7 +689,7 @@ fun InputBar(
                             val cancelPx = with(androidx.compose.ui.platform.LocalDensity.current) { 60.dp.toPx() }
                             Box(
                                 Modifier
-                                    .size(25.dp)
+                                    .size(DsMetric.inputIconBox.dp)
                                     .pointerInteropFilter { ev ->
                                         when (ev.actionMasked) {
                                             MotionEvent.ACTION_DOWN -> {
@@ -733,7 +735,7 @@ fun InputBar(
                                     ),
                                     contentDescription = if (voiceMode) "切换至键盘" else "按住说话",
                                     tint = ds.inputIcon,
-                                    modifier = Modifier.size(24.6.dp),
+                                    modifier = Modifier.size(DsMetric.inputIconSize.dp),
                                 )
                             }
                         }
@@ -751,8 +753,8 @@ fun InputBar(
                 Modifier
                     .fillMaxWidth()
                     // 卡底 2085px → 免责墨迹顶 2093px（4dp）、容器底 2116px（导航栏上沿）
-                    .padding(top = 3.dp)
-                    .height(12.5.dp),
+                    .padding(top = DsMetric.footerTopPad.dp)
+                    .height(DsMetric.footerH.dp),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Text(

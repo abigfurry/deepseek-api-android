@@ -10,6 +10,31 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
 
 /**
+ * 系统「动画时长缩放」（开发者选项 → 动画时长缩放 / 部分 ROM 的「移除动画」）读取器。
+ *
+ * [rememberFrameAnim] 是逐帧自己计时的，不经过 Compose 的 MotionDurationScale，
+ * 所以必须手动把时长乘上这个缩放，才能和系统设置一致：
+ *   · 1x → 原始时长；0.5x → 一半；2x/10x → 相应变长
+ *   · 0（移除动画）→ 动画直接到末态
+ * 由 DsApp 组合时读一次（设置变化一般要重启 App 或重开页面才生效，和官方行为一致）。
+ */
+object DsAnimScale {
+    @Volatile
+    var scale: Float = 1f
+        private set
+
+    fun read(ctx: android.content.Context) {
+        scale = runCatching {
+            android.provider.Settings.Global.getFloat(
+                ctx.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            )
+        }.getOrDefault(1f).coerceIn(0f, 10f)
+    }
+}
+
+/**
  * 逐帧驱动的小动画工具（不依赖 Compose 的动画时钟）。
  *
  * 为什么不用 Animatable / animateFloatAsState / AnimatedContent：
@@ -48,7 +73,8 @@ fun rememberFrameAnim(
         // 已经跑满（首次组合且 startAtEnd）就不播，也不回调。
         if (progress.value >= 1f) return@LaunchedEffect
 
-        val totalNanos = durationMs.coerceAtLeast(0).toLong() * 1_000_000L
+        // 跟随系统「动画时长缩放」：0 → 立即到末态；0.5/2/10 → 时长按比例缩放
+        val totalNanos = (durationMs.coerceAtLeast(0) * DsAnimScale.scale).toLong() * 1_000_000L
         if (totalNanos <= 0L) {
             progress.value = 1f
             finished.value?.invoke()

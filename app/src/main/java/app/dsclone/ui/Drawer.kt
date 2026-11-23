@@ -74,6 +74,7 @@ import com.yuyuyu.deepseek.data.Session
 import com.yuyuyu.deepseek.data.Settings
 import androidx.compose.ui.graphics.Color
 import com.yuyuyu.deepseek.ui.theme.DsBlue
+import com.yuyuyu.deepseek.ui.theme.DsLayout
 import com.yuyuyu.deepseek.ui.theme.DsMetric
 import com.yuyuyu.deepseek.ui.theme.LocalDsColors
 
@@ -131,7 +132,8 @@ fun DrawerContent(
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         // 官方：搜索胶囊距抽屉顶 39.5dp（状态栏 24dp 之后 15.5dp）—— 实测 audit-drawer.png
-        Spacer(Modifier.height(15.5.dp))
+        // 窄屏：官方搜索胶囊顶 ≈32.25（状态栏 22 之后 10）
+        Spacer(Modifier.height(DsMetric.drawerSearchTop.dp))
 
         // 搜索胶囊：点击后进入搜索模式，下面列表被替换成结果
         var searchMode by remember { mutableStateOf(false) }
@@ -156,9 +158,9 @@ fun DrawerContent(
                 .fillMaxWidth()
                 // 官方：搜索胶囊 x=15…290.5（宽 275.5）、高 45dp、圆角 22.5（胶囊）
                 // —— 实测 audit-drawer.png mask(#F5F5F5) bbox
-                .padding(start = DsMetric.DRAWER_SEARCH_X.dp, end = DsMetric.DRAWER_SEARCH_X.dp)
-                .height(DsMetric.DRAWER_SEARCH_H.dp)
-                .clip(RoundedCornerShape(DsMetric.DRAWER_SEARCH_RADIUS.dp))
+                .padding(start = DsMetric.drawerSearchX.dp, end = DsMetric.drawerSearchX.dp)
+                .height(DsMetric.drawerSearchH.dp)
+                .clip(RoundedCornerShape(DsMetric.drawerSearchRadius.dp))
                 .background(ds.tileBg)
                 .clickable { searchMode = true },
             verticalAlignment = Alignment.CenterVertically,
@@ -184,11 +186,11 @@ fun DrawerContent(
                     painter = painterResource(R.drawable.ic_search_outline_16),
                     contentDescription = null,
                     tint = ds.iconGray,
-                    modifier = Modifier.size(16.5.dp),
+                    modifier = Modifier.size(if (DsLayout.narrow) 14.3.dp else 16.5.dp),
                 )
             }
             // 官方：占位文字 x=53dp（=15 胶囊左 + 13 + 16.5 图标 + 8.5 间距）—— 实测 audit-drawer.png
-            Spacer(Modifier.width(8.5.dp))
+            Spacer(Modifier.width(if (DsLayout.narrow) 5.2.dp else 8.5.dp))
             if (searchMode) {
                 BasicTextField(
                     value = query,
@@ -221,7 +223,7 @@ fun DrawerContent(
 
         // 官方：搜索胶囊底 84.5dp → 首个分组头行盒顶 101.5dp（ui (41,203) → 101.5dp）：
         // 5.5 + 分组行 paddingTop 11.43 = 16.93 ≈ 17dp —— 实测 audit-drawer.png
-        Spacer(Modifier.height(5.5.dp))
+        Spacer(Modifier.height(if (DsLayout.narrow) 3.5.dp else 5.5.dp))
         }
 
         // 官方：历史按 今天 / 昨天 / 7 天内 / 更早 分组，组与组之间有分隔线
@@ -302,8 +304,8 @@ fun DrawerContent(
                                 Modifier
                                     .fillMaxWidth()
                                     // 官方：分组头文字 x=20.5dp、行高 18dp（ui 节点高 19dp）—— ui (41,203)-(95,241) / kt:SessionGroupHeader.kt:111
-                                    .padding(start = DsMetric.DRAWER_GROUP_TEXT_X.dp, end = 21.78.dp, top = 11.43.dp, bottom = 3.81.dp)
-                                    .height(DsMetric.DRAWER_GROUP_H.dp),
+                                    .padding(start = DsMetric.drawerGroupTextX.dp, end = 21.78.dp, top = 11.43.dp, bottom = if (DsLayout.narrow) 3.dp else 3.81.dp)
+                                    .height(DsMetric.drawerGroupH.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
@@ -382,14 +384,14 @@ fun DrawerContent(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = DsMetric.DRAWER_SEARCH_X.dp, end = 14.5.dp, bottom = 6.dp)
-                .height(DsMetric.DRAWER_ACCOUNT_H.dp),
+                .padding(start = DsMetric.drawerSearchX.dp, end = 14.5.dp, bottom = 6.dp)
+                .height(DsMetric.drawerAccountH.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 头像 + 昵称（在 设置 → 账号管理 → 个人资料 里改）
             // 官方：头像直径按 15 左边距、昵称 54.5 反推 ≈30dp —— 实测 audit-drawer.png
             Box(Modifier.clickable(onClick = onSettings)) {
-                AvatarView(path = settings.avatarPath, size = DsMetric.DRAWER_AVATAR.dp)
+                AvatarView(path = settings.avatarPath, size = DsMetric.drawerAvatar.dp)
             }
             Text(
                 text = settings.nickName.ifBlank { "本地账号" },
@@ -845,17 +847,17 @@ private fun SessionRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = DsMetric.DRAWER_SELECT_INSET.dp)
-            .clip(RoundedCornerShape(DsMetric.DRAWER_SELECT_RADIUS.dp))
+            .padding(horizontal = if (DsLayout.narrow) 8.2.dp else DsMetric.DRAWER_SELECT_INSET.dp)
+            .clip(RoundedCornerShape(if (DsLayout.narrow) 13.dp else DsMetric.DRAWER_SELECT_RADIUS.dp))
             // 官方多选态每行没有高亮胶囊，只靠左侧勾选 + 蓝色文字表示选中
             .background(if (!selectionMode && selected) dsRow.chipOn else Color.Transparent)
             .combinedClickable(
                 onClick = { if (selectionMode) onToggleSelect() else onSelect() },
                 onLongClick = { if (selectionMode) onToggleSelect() else menu = true },
             )
-            .height(DsMetric.DRAWER_ROW_H.dp)
+            .height(DsMetric.drawerRowH.dp)
             // 文字 x=21 → 21 - 9.5(胶囊左) = 11.5；行尾图标右缘 x=290.5 → 295.5 - 290.5 = 5
-            .padding(start = 11.5.dp, end = 5.dp)
+            .padding(start = if (DsLayout.narrow) 9.8.dp else 11.5.dp, end = 5.dp)
             .then(
                 if (menu) {
                     Modifier.onGloballyPositioned {
