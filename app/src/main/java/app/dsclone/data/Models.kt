@@ -235,9 +235,19 @@ data class Settings(
     val customModels: Map<String, List<String>> = emptyMap(),
     /** 每家 provider 的余额展示缓存：json {"t":时间戳,"text":"¥110.00","detail":"..."} */
     val balanceCache: Map<String, String> = emptyMap(),
+    /**
+     * 每家 provider 的「接口类型」（key = providerId）：
+     *  - "chat"（默认，缺失也按 chat）：POST {baseUrl}/chat/completions
+     *  - "responses"：POST {baseUrl}/responses（OpenAI Responses API 风格）
+     * 手写 JSON，Store.loadSettings / saveSettings 两处都要维护。
+     */
+    val apiStyles: Map<String, String> = emptyMap(),
 ) {
     val apiKey: String
         get() = keys[providerId] ?: ""
+
+    /** 接口类型：providerId → "chat" | "responses"（没有记录 = "chat"） */
+    fun apiStyle(providerId: String): String = apiStyles[providerId] ?: "chat"
 
     /** 旧 UI 用的静态 provider 视图（由预设表派生，见 [Providers]） */
     val provider: Provider

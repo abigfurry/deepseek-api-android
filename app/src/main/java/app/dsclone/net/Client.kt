@@ -1,7 +1,9 @@
 package com.yuyuyu.deepseek.net
 
+import com.yuyuyu.deepseek.data.AuthStyle
 import com.yuyuyu.deepseek.data.Msg
 import com.yuyuyu.deepseek.data.ProviderApi
+import com.yuyuyu.deepseek.data.ProviderPreset
 import com.yuyuyu.deepseek.data.Settings
 import okhttp3.Call
 import okhttp3.Callback
@@ -13,6 +15,7 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 object Client {
@@ -76,7 +79,23 @@ object Client {
         return out
     }
 
+    /**
+     * 当前请求体：按「接口类型」分发。
+     *   chat      → /chat/completions 的 {model, messages, stream:true, ...}（与改造前逐字段一致）
+     *   responses → /responses 的 {model, input, instructions, stream:true}
+     * ui/ContextSheet.kt 的「当前请求体」预览也走这里，所以选 Responses 时看到的就是真实请求体。
+     */
     fun payloadJson(
+        settings: Settings,
+        history: List<Msg>,
+        imageDataUrls: List<String> = emptyList(),
+    ): JSONObject = if (settings.apiStyle(settings.providerId) == "responses") {
+        responsesPayloadJson(settings, history, imageDataUrls)
+    } else {
+        chatPayloadJson(settings, history, imageDataUrls)
+    }
+
+    private fun chatPayloadJson(
         settings: Settings,
         history: List<Msg>,
         imageDataUrls: List<String> = emptyList(),
@@ -110,12 +129,7 @@ object Client {
         // 注意：providerId == "deepseek" 的三处专属分支保持原样，DeepSeek 是回归第一优先级。
         val preset = settings.preset
         val isDeepSeek = settings.providerId == "deepseek"
-        val model = settings.model.ifBlank {
-            if (isDeepSeek) "deepseek-flash" else preset.fallbackModels.firstOrNull().orEmpty()
-        }
-        val effectiveModel = if (isDeepSeek &&
-            (settings.search || imageDataUrls.isNotEmpty() || model in setOf("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash-vision-exp"))
-        ) "deepseek-flash" else model
+        val effectiveModel = modelFor(settings, imageDataUrls)
         val payload = JSONObject()
             .put("model", effectiveModel)
             .put("messages", msgs)
@@ -166,6 +180,86 @@ object Client {
         return payload
     }
 
+    /** 当前 provider 下实际发给服务端的模型名（chat 与 responses 共用，避免两条路径选模型漂移） */
+    private fun modelFor(settings: Settings, imageDataUrls: List<String>): String {
+        val preset = settings.preset
+        val isDeepSeek = settings.providerId == "deepseek"
+        val model = settings.model.ifBlank {
+            if (isDeepSeek) "deepseek-flash" else preset.fallbackModels.firstOrNull().orEmpty()
+        }
+        return if (isDeepSeek &&
+            (settings.search || imageDataUrls.isNotEmpty() ||
+                model in setOf("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash-vision-exp"))
+        ) "deepseek-flash" else model
+    }
+
+    /**
+     * Responses API（/v1/responses）请求体。只发官方受支持的字段，避免第三方中转站 400：
+     *   {"model":..., "input":[{"role":"user","content":[{"type":"input_text","text":"..."}]}],
+     *    "stream":true, "instructions":"<系统提示词>"}
+     *
+     * 与 /chat/completions 的差异：
+     *  - 历史放在 `input` 数组里，不是 `messages`；assistant 历史的内容块类型是 output_text，
+     *    user 是 input_text（官方 Responses 规范）；
+     *  - 系统提示词走顶层 `instructions`（不进 input 数组），没有 system 消息角色；
+     *  - 图片挂在最后一条 user 上：{"type":"input_image","image_url":"data:image/...;base64,..."}；
+     *  - 输出上限字段叫 max_output_tokens（chat 是 max_tokens）；
+     *  - thinking / tools / stream_options / stop / reasoning_effort / user_id / title /
+     *    safety_check / response_format 这些「全家桶应用 API」或 chat 专属字段一律不发。
+     *    温度/top_p 只在预设声明支持时发（Responses 官方支持这两个字段）。
+     */
+    private fun responsesPayloadJson(
+        settings: Settings,
+        history: List<Msg>,
+        imageDataUrls: List<String> = emptyList(),
+    ): JSONObject {
+        val cleaned = cleanHistory(history)
+        val lastUserIndex = cleaned.indexOfLast { it.role == "user" }
+        val input = JSONArray()
+        cleaned.forEachIndexed { i, m ->
+            val parts = JSONArray()
+            // Responses 对空 content 数组不友好，空正文兜底成占位文案（chat 路径只兜底最后一条）
+            val text = m.text.ifBlank { "（附件）" }
+            parts.put(
+                JSONObject()
+                    .put("type", if (m.role == "assistant") "output_text" else "input_text")
+                    .put("text", text),
+            )
+            if (i == lastUserIndex) {
+                imageDataUrls.forEach { url ->
+                    parts.put(JSONObject().put("type", "input_image").put("image_url", url))
+                }
+            }
+            input.put(JSONObject().put("role", m.role).put("content", parts))
+        }
+        val preset = settings.preset
+        val payload = JSONObject()
+            .put("model", modelFor(settings, imageDataUrls))
+            .put("input", input)
+            .put("stream", true)
+        if (settings.systemPrompt.isNotBlank()) {
+            payload.put("instructions", settings.systemPrompt.trim())
+        }
+        // 只发 Responses 官方字段；thinking/tools 等 chat 专属字段一律不带，避免 400
+        if (preset.supportsTemperature) payload.put("temperature", settings.temperature.toDouble())
+        if (preset.supportsTopP) payload.put("top_p", settings.topP.toDouble())
+        if (settings.maxTokens > 0) payload.put("max_output_tokens", settings.maxTokens)
+        return payload
+    }
+
+    /**
+     * Responses 端点：{effectiveBaseUrl}/responses。
+     * baseUrl 可能已含 /v1（openai 预设是 https://api.openai.com/v1）→ https://api.openai.com/v1/responses；
+     * 用户把完整 .../chat/completions 粘进来时 ProviderApi.normalizeBaseUrl 会先还原成根地址；
+     * 已经直接填了 .../responses 的原样使用。
+     */
+    fun responsesUrl(preset: ProviderPreset, baseUrl: String, apiKey: String): String {
+        val base = baseUrl.trim()
+        val lower = base.lowercase(Locale.US)
+        val url = if (lower.endsWith("/responses")) base else ProviderApi.join(base, "/responses")
+        return if (preset.auth == AuthStyle.QueryKey) ProviderApi.appendQueryKey(url, apiKey) else url
+    }
+
     fun chat(
         settings: Settings,
         history: List<Msg>,
@@ -177,11 +271,19 @@ object Client {
     ): Call {
         val payload = payloadJson(settings, history, imageDataUrls)
         val preset = settings.preset
-        // 端点 = 用户覆盖的 baseUrl / 预设默认 baseUrl + 预设 chatPath。
-        // DeepSeek 预设是 https://api.deepseek.com + /chat/completions，与改造前逐字符一致；
-        // 用户把完整 .../chat/completions 粘进 baseUrl 的老行为也保留（ProviderApi.chatUrl 里处理）。
+        // 接口类型：chat（默认）= /chat/completions，responses = /responses。请求体已由 payloadJson 按同
+        // 一个设置分发，这里只决定端点。chat 分支的 URL/头/解析与改造前逐字符一致。
+        val isResponses = settings.apiStyle(settings.providerId) == "responses"
+        val url = if (isResponses) {
+            responsesUrl(preset, settings.effectiveBaseUrl, settings.apiKey)
+        } else {
+            // 端点 = 用户覆盖的 baseUrl / 预设默认 baseUrl + 预设 chatPath。
+            // DeepSeek 预设是 https://api.deepseek.com + /chat/completions，与改造前逐字符一致；
+            // 用户把完整 .../chat/completions 粘进 baseUrl 的老行为也保留（ProviderApi.chatUrl 里处理）。
+            ProviderApi.chatUrl(preset, settings.effectiveBaseUrl, settings.apiKey)
+        }
         val requestBuilder = Request.Builder()
-            .url(ProviderApi.chatUrl(preset, settings.effectiveBaseUrl, settings.apiKey))
+            .url(url)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
         // 鉴权按 provider 的 authStyle 生成：
@@ -208,45 +310,16 @@ object Client {
                         } catch (e: Exception) {
                             ""
                         }
-                        onError("HTTP " + r.code + " " + body.take(400))
+                        // 友好化：不再把整段原始 JSON 当正文显示，取 error.message / error.code。
+                        onError(friendlyHttpError(r.code, body))
                         return
                     }
                     try {
-                        val src = r.body.source()
-                        // 服务端联网工具：过程事件在 choice.server_tool_event，
-                        // 完整的 server_tool_calls / annotations 在最后一个 delta；
-                        // WebToolStream 内部按 index/id 合并、按 url 累加，分批下发也不会丢
-                        val web = WebToolStream()
-                        while (true) {
-                            val line = src.readUtf8Line() ?: break
-                            if (!line.startsWith("data:")) continue
-                            val data = line.substring(5).trim()
-                            if (data.isEmpty()) continue
-                            if (data == "[DONE]") break
-                            val chunk = JSONObject(data)
-                            chunk.optJSONObject("error")?.let {
-                                onError(it.optString("message", "生成中断"))
-                                return
-                            }
-                            val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
-                            val delta = choice.optJSONObject("delta")
-                            val content = delta?.stringValue("content").orEmpty()
-                            val reasoning = delta?.stringValue("reasoning_content").orEmpty()
-                            // 过程事件 / 末包里的 server_tool_calls 一有变化就回调，
-                            // DsApp 会写进 Msg.steps，思考链实时长出「搜索到 N 个网页」
-                            if (web.accept(choice, delta, reasoning)) {
-                                val steps = web.steps()
-                                // 诊断：adb logcat -s DsSteps（每次步骤变化一行，action:count）
-                                android.util.Log.d("DsSteps", "steps=" + steps.size + " " +
-                                    steps.joinToString(" ") { it.action + ":" + it.count })
-                                onSteps(steps, web.rawCalls, web.citations)
-                            }
-                            if (content.isNotEmpty() || reasoning.isNotEmpty()) onDelta(content, reasoning)
+                        if (isResponses) {
+                            readResponsesStream(r, onDelta, onDone, onError)
+                        } else {
+                            readChatStream(r, onDelta, onDone, onError, onSteps)
                         }
-                        // 收尾兜底：末包只更新了 citations、或者最后一次合并没触发回调时，
-                        // 这里再刷一次，保证结束前 Msg.steps / Msg.citations 与解析结果一致。
-                        onSteps(web.steps(), web.rawCalls, web.citations)
-                        onDone()
                     } catch (e: Exception) {
                         onError(e.message ?: "读取响应失败")
                     }
@@ -254,5 +327,190 @@ object Client {
             }
         })
         return call
+    }
+
+    /**
+     * /chat/completions 的 SSE 解析（原 chat() 内的循环原样搬出来，逻辑逐行保持不变）。
+     */
+    private fun readChatStream(
+        r: Response,
+        onDelta: (content: String, reasoning: String) -> Unit,
+        onDone: () -> Unit,
+        onError: (String) -> Unit,
+        onSteps: (List<com.yuyuyu.deepseek.data.Step>, String, List<com.yuyuyu.deepseek.data.Source>) -> Unit,
+    ) {
+        val src = r.body.source()
+        // 服务端联网工具：过程事件在 choice.server_tool_event，
+        // 完整的 server_tool_calls / annotations 在最后一个 delta；
+        // WebToolStream 内部按 index/id 合并、按 url 累加，分批下发也不会丢
+        val web = WebToolStream()
+        while (true) {
+            val line = src.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.substring(5).trim()
+            if (data.isEmpty()) continue
+            if (data == "[DONE]") break
+            val chunk = JSONObject(data)
+            chunk.optJSONObject("error")?.let {
+                onError(it.optString("message", "生成中断") + styleHint(it.optString("message", "")))
+                return
+            }
+            val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
+            val delta = choice.optJSONObject("delta")
+            val content = delta?.stringValue("content").orEmpty()
+            val reasoning = delta?.stringValue("reasoning_content").orEmpty()
+            // 过程事件 / 末包里的 server_tool_calls 一有变化就回调，
+            // DsApp 会写进 Msg.steps，思考链实时长出「搜索到 N 个网页」
+            if (web.accept(choice, delta, reasoning)) {
+                val steps = web.steps()
+                // 诊断：adb logcat -s DsSteps（每次步骤变化一行，action:count）
+                android.util.Log.d("DsSteps", "steps=" + steps.size + " " +
+                    steps.joinToString(" ") { it.action + ":" + it.count })
+                onSteps(steps, web.rawCalls, web.citations)
+            }
+            if (content.isNotEmpty() || reasoning.isNotEmpty()) onDelta(content, reasoning)
+        }
+        // 收尾兜底：末包只更新了 citations、或者最后一次合并没触发回调时，
+        // 这里再刷一次，保证结束前 Msg.steps / Msg.citations 与解析结果一致。
+        onSteps(web.steps(), web.rawCalls, web.citations)
+        onDone()
+    }
+
+    /**
+     * /responses 的 SSE 解析（OpenAI Responses API 事件流）：
+     *   event: response.output_text.delta              data: {"type":"...","delta":"..."}          → 正文
+     *   event: response.reasoning_summary_text.delta   data: {"type":"...","delta":"..."}          → 推理
+     *   event: response.reasoning_text.delta           data: {...}                                 → 推理
+     *   event: response.output_text.done               data: {"text":"..."}                        → 兜底整段（无 delta 时）
+     *   event: response.completed                      data: {...}                                 → 正常结束
+     *   event: response.failed / type:"error"          data: {"error":{...}} / {"message":...}      → 报错
+     * 没收到 response.completed 而连接关闭时也按完成处理（部分中转站不发完成事件）。
+     */
+    private fun readResponsesStream(
+        r: Response,
+        onDelta: (content: String, reasoning: String) -> Unit,
+        onDone: () -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val src = r.body.source()
+        var gotText = false
+        var gotReason = false
+        while (true) {
+            val line = src.readUtf8Line() ?: break
+            // Responses 的 SSE 同时有 "event: xxx" 与 "data: {...}"，事件类型以 data 里的 type 为准
+            if (!line.startsWith("data:")) continue
+            val data = line.substring(5).trim()
+            if (data.isEmpty()) continue
+            if (data == "[DONE]") break
+            val obj = try {
+                JSONObject(data)
+            } catch (e: Exception) {
+                continue
+            }
+            when (obj.optString("type")) {
+                "response.output_text.delta" -> {
+                    val d = obj.optString("delta")
+                    if (d.isNotEmpty()) {
+                        gotText = true
+                        onDelta(d, "")
+                    }
+                }
+                "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
+                    val d = obj.optString("delta")
+                    if (d.isNotEmpty()) {
+                        gotReason = true
+                        onDelta("", d)
+                    }
+                }
+                // 兜底：有的中转站不发 delta 只发 done，只在完全没收到 delta 时补整段，避免重复
+                "response.output_text.done" -> {
+                    val t = obj.optString("text")
+                    if (!gotText && t.isNotEmpty()) {
+                        gotText = true
+                        onDelta(t, "")
+                    }
+                }
+                "response.reasoning_summary_text.done", "response.reasoning_text.done" -> {
+                    val t = obj.optString("text")
+                    if (!gotReason && t.isNotEmpty()) {
+                        gotReason = true
+                        onDelta("", t)
+                    }
+                }
+                "response.completed", "response.incomplete" -> {
+                    onDone()
+                    return
+                }
+                "response.failed" -> {
+                    onError(friendlyResponseError(obj))
+                    return
+                }
+                "error" -> {
+                    onError(friendlyResponseError(obj))
+                    return
+                }
+            }
+            // 少数网关把错误塞在顶层 error 对象里、type 却是别的值
+            if (obj.has("error") && obj.optJSONObject("error") != null) {
+                onError(friendlyResponseError(obj))
+                return
+            }
+        }
+        onDone()
+    }
+
+    // ------------------------------------------------------------------ 错误文案（友好化）
+
+    /**
+     * 非 2xx 的友好错误：
+     *   - 有 error.message → `请求失败（HTTP <code>）：<message>`；
+     *   - 没有 message 但有 error.code → 用 code 代替 message；
+     *   - 完全没有 → `HTTP <code> <body 前 120 字>`（不把整段 JSON 塞进气泡）。
+     * 如果 message 提示要换接口（含 /v1/responses、Responses、chat/completions 等字样），
+     * 追加一行「去设置里切 Responses」的指引。
+     */
+    fun friendlyHttpError(code: Int, body: String): String {
+        val text = body.trim()
+        val err = try {
+            if (text.startsWith("{")) JSONObject(text).optJSONObject("error") else null
+        } catch (e: Exception) {
+            null
+        }
+        val message = err?.let { stringOf(it, "message") }.orEmpty()
+            .ifBlank { err?.let { stringOf(it, "code") }.orEmpty() }
+        if (message.isBlank()) {
+            val head = text.replace(Regex("\\s+"), " ").take(120)
+            return "HTTP $code " + head + styleHint(head)
+        }
+        return "请求失败（HTTP $code）：" + message + styleHint(message)
+    }
+
+    /** response.failed / type:"error" 事件的错误文案 */
+    private fun friendlyResponseError(obj: JSONObject): String {
+        val respErr = obj.optJSONObject("response")?.optJSONObject("error")
+        val err = obj.optJSONObject("error") ?: respErr
+        val message = err?.let { stringOf(it, "message") }.orEmpty()
+            .ifBlank { obj.optString("message") }
+            .ifBlank { err?.let { stringOf(it, "code") }.orEmpty() }
+        val brief = message.ifBlank { "生成中断：" + obj.toString().replace(Regex("\\s+"), " ").take(120) }
+        return "请求失败：" + brief + styleHint(brief)
+    }
+
+    /** JSONObject 取字符串，兼容 JSON null / 非字符串值 */
+    private fun stringOf(o: JSONObject, key: String): String {
+        val v = o.opt(key) ?: return ""
+        return if (v is String) if (v == "null") "" else v else v.toString()
+    }
+
+    /** 服务端提示「该用 Responses API」时，追加操作指引（错误气泡里的第二行） */
+    private fun styleHint(text: String): String {
+        val t = text.lowercase(Locale.US)
+        val needsResponses = t.contains("/v1/responses") || t.contains("responses") ||
+            t.contains("chat/completions")
+        return if (needsResponses) {
+            "\n→ 该服务商要求切换「接口类型」为 Responses API，请在 设置 → API 与模型 里改。"
+        } else {
+            ""
+        }
     }
 }

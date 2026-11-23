@@ -277,6 +277,32 @@ private fun ApiPage(s: Settings, onChange: (Settings) -> Unit, onToast: (String)
             )
         }
 
+        // 接口类型：部分中转站已停用 /v1/chat/completions，只放行 /v1/responses。
+        // 选 chat 时请求体/流式解析与改造前逐字段一致；选 responses 走 Responses API。
+        val apiStyle = s.apiStyle(s.providerId)
+        DsGroupHeader("接口类型")
+        DsCard {
+            SettingRow(
+                label = "Chat Completions（/v1/chat/completions）",
+                value = if (apiStyle == "chat") "当前" else null,
+                valueColor = DsBlue,
+                chevron = false,
+                onClick = {
+                    onChange(s.copy(apiStyles = s.apiStyles + (s.providerId to "chat")))
+                },
+            )
+            SettingRow(
+                label = "Responses API（/v1/responses）",
+                value = if (apiStyle == "responses") "当前" else null,
+                valueColor = DsBlue,
+                chevron = false,
+                onClick = {
+                    onChange(s.copy(apiStyles = s.apiStyles + (s.providerId to "responses")))
+                },
+            )
+        }
+        DsSupporting("部分中转站已停用 chat/completions：需要选 Responses API（/v1/responses）。")
+
         DsGroupHeader("思考")
         DsCard {
             SettingSwitchRow("深度思考", s.thinking, { onChange(s.copy(thinking = it)) })

@@ -125,6 +125,8 @@ object Store {
                 providerModels = readListMap(o.optJSONObject("providerModels")),
                 customModels = readListMap(o.optJSONObject("customModels")),
                 balanceCache = readStringMap(o.optJSONObject("balanceCache")),
+                // 接口类型：providerId -> "chat" | "responses"（老 json 没有 → 空 map = 全部 chat）
+                apiStyles = readStringMap(o.optJSONObject("apiStyles")),
             )
         } catch (e: Exception) {
             Settings()
@@ -196,6 +198,8 @@ object Store {
             .put("providerModels", writeListMap(s.providerModels))
             .put("customModels", writeListMap(s.customModels))
             .put("balanceCache", writeStringMap(s.balanceCache))
+            // 接口类型：providerId -> "chat" | "responses"
+            .put("apiStyles", writeStringMap(s.apiStyles))
         file(ctx, "settings.json").writeText(o.toString())
     }
 
