@@ -3,21 +3,30 @@ package com.yuyuyu.deepseek.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,8 +41,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Icon
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -298,6 +305,142 @@ fun AttachmentFileChip(a: Attachment, onRemove: (Attachment) -> Unit) {
                 tint = Color(0xFF9AA0A6),
                 modifier = Modifier.size(12.dp),
             )
+        }
+    }
+}
+
+// =====================================================================================
+//  官方附件面板「最近图片」快捷条（UploadPanelImageScroller）
+// =====================================================================================
+//
+// 官方 2.9.0 出处：
+//   · 面板：UploadPanel.kt:37（smali Lm87;->g，@trace UploadPanel (UploadPanel.kt:37)）
+//     内部依次是 UploadPanelImageScroller + UploadPanelActionButtonGroup（smali Lto3;->c0）
+//     + getUploadPanelHint（UploadPanel.kt:86）
+//   · 图片横滑条：UploadPanelImageScroller.kt:34（smali La87;->b，@trace）
+//   · 单张图：UploadPanelImage.kt:141（smali Lgpb;，带勾选圈）
+//   · 权限：UploadPanelPermission.kt:122 申请 READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE
+//   · 相册选择：ChatInputAttachmentMenu.kt:75 rememberUploadActions 注册
+//     PickMultipleVisualMedia / PickVisualMedia（androidx.activity result 契约，多选）
+//
+// 同机实测官方 2.8.0（A7 640dp，dark）：面板 [11,1248][1269,1733]，
+//   · 缩略图 75dp 方块（150px）、横滑、间距 7.5dp、圆角 ≈14dp、首图 x=24.5dp；
+//   · 每张右上角 24dp 白色圆圈勾选（选中态变实心白底+黑勾）；
+//   · 缩略图条 → 三块按钮 间距 19dp，三块按钮仍为 192×79dp / 间距 7.5dp；
+//   · 点一张缩略图 = 直接作为图片附件加到输入卡（快捷上传），面板不关闭，可多选。
+//
+// 只在 API 有读相册权限时查询/显示；无权限时面板仍是原来的三块按钮（不硬编假图）。
+
+/** 当前系统版本下读相册需要的运行时权限。 */
+fun mediaReadPermission(): String =
+    if (Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_IMAGES
+    else android.Manifest.permission.READ_EXTERNAL_STORAGE
+
+/** 是否已拿到读相册权限（API 34+ 的部分授权 USER_SELECTED 也算能读选中的图）。 */
+fun hasMediaReadPermission(ctx: android.content.Context): Boolean {
+    fun granted(p: String) = androidx.core.content.ContextCompat.checkSelfPermission(ctx, p) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+    return if (Build.VERSION.SDK_INT >= 33) {
+        granted(android.Manifest.permission.READ_MEDIA_IMAGES) ||
+            (Build.VERSION.SDK_INT >= 34 && granted("android.permission.READ_MEDIA_VISUAL_USER_SELECTED"))
+    } else {
+        granted(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+}
+
+/** 查最近图片（按 DATE_ADDED 倒序），只返回 MediaStore id → content Uri，不解码。 */
+fun queryRecentImageUris(ctx: android.content.Context, limit: Int = 30): List<Uri> = runCatching {
+    val projection = arrayOf(android.provider.MediaStore.Images.Media._ID)
+    val sortOrder = android.provider.MediaStore.Images.Media.DATE_ADDED + " DESC"
+    val out = ArrayList<Uri>(limit)
+    ctx.contentResolver.query(
+        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection, null, null, sortOrder,
+    )?.use { c ->
+        val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media._ID)
+        while (c.moveToNext() && out.size < limit) {
+            out.add(
+                android.content.ContentUris.withAppendedId(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    c.getLong(idCol),
+                )
+            )
+        }
+    }
+    out
+}.getOrDefault(emptyList())
+
+/** 权限通过后异步加载最近图片列表（面板每次打开时刷新）。 */
+@Composable
+fun rememberRecentImageUris(permissionGranted: Boolean, limit: Int = 30): List<Uri> {
+    val ctx = LocalContext.current
+    var list by remember(permissionGranted, limit) { mutableStateOf<List<Uri>>(emptyList()) }
+    LaunchedEffect(permissionGranted, limit) {
+        list = if (!permissionGranted) emptyList()
+        else withContext(Dispatchers.IO) { queryRecentImageUris(ctx, limit) }
+    }
+    return list
+}
+
+/**
+ * 官方「最近图片」横滑快捷条。点一张 = 直接加为附件（快捷上传）；再点一次取消。
+ */
+@Composable
+fun RecentImageStrip(
+    images: List<Uri>,
+    selected: Set<String>,
+    onToggle: (Uri) -> Unit,
+    horizontalInset: androidx.compose.ui.unit.Dp = 24.5.dp,
+) {
+    if (images.isEmpty()) return
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 22.5.dp, bottom = 19.dp),
+        contentPadding = PaddingValues(horizontal = horizontalInset),
+        horizontalArrangement = Arrangement.spacedBy(7.5.dp),
+    ) {
+        items(images, key = { it.toString() }) { uri ->
+            val picked = selected.contains(uri.toString())
+            Box(Modifier.size(75.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF2A2A2A))
+                        .clickable { onToggle(uri) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bmp = rememberAttachmentBitmap(uri, maxSide = 300)
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                // 官方勾选圈：24dp 白色圆环（未选）/ 实心白底+深色勾（选中），贴右上角
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 6.dp, end = 6.dp)
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(if (picked) Color.White else Color(0x4D1A1A1A))
+                        .then(if (picked) Modifier else Modifier.border(1.5.dp, Color(0xE6FFFFFF), CircleShape)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (picked) {
+                        Text(
+                            text = "✓",
+                            fontSize = 14.sp,
+                            color = Color(0xFF1A1A1A),
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -159,6 +159,13 @@ fun DsApp() {
     ) { uri ->
         if (uri != null) attachments.add(Attachment(uri, true, "图片"))
     }
+    // 官方附件面板的「最近图片」快捷条要读相册：API≤32 READ_EXTERNAL_STORAGE / API≥33 READ_MEDIA_IMAGES
+    var mediaGranted by remember { mutableStateOf(hasMediaReadPermission(ctx)) }
+    val mediaPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted -> mediaGranted = granted || hasMediaReadPermission(ctx) }
+    // 面板打开且有权限时刷新最近图片（UploadPanelImageScroller 等价实现）
+    val recentImages = rememberRecentImageUris(mediaGranted, limit = 30)
     val fileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -743,7 +750,12 @@ $$
                     value = input,
                     onValueChange = { input = it },
                     attachments = attachments,
-                    onAddAttachment = { attachSheet = !attachSheet },
+                    onAddAttachment = {
+            val willOpen = !attachSheet
+            attachSheet = willOpen
+            // 官方：打开附件面板时请求相册权限（UploadPanelPermission.kt），拿到后显示最近图片
+            if (willOpen && !mediaGranted) mediaPermission.launch(mediaReadPermission())
+        },
                     onRemoveAttachment = { attachments.remove(it) },
                     sending = sending,
                     thinking = settings.thinking,
@@ -844,6 +856,14 @@ $$
                         onFile = {
                             attachSheet = false
                             fileLauncher.launch(arrayOf("*/*"))
+                        },
+                        // 官方「最近图片」快捷条：点一张直接作为附件（快捷上传），面板保持打开可继续多选
+                        recentImages = if (attachSheet) recentImages else emptyList(),
+                        selectedUris = attachments.map { it.uri.toString() }.toSet(),
+                        onPickRecent = { uri ->
+                            val i = attachments.indexOfFirst { it.uri == uri }
+                            if (i >= 0) attachments.removeAt(i)
+                            else attachments.add(Attachment(uri, true, "图片"))
                         },
                     )
                 }

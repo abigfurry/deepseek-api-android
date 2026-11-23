@@ -892,8 +892,9 @@ private fun VoiceBlobFlow(modifier: Modifier = Modifier, palette: VoicePalette) 
 private fun FontSizePage(s: Settings, onChange: (Settings) -> Unit) {
     val ds = LocalDsColors.current
     val level = s.fontSizeLevel.coerceIn(0, 4)
-    // 预览区跟随选择缩放；「跟随系统」时预览用 1.0（真实字号由系统决定）
-    val scale = if (s.followSystemFont) 1f else DsFontScales[level]
+    // 官方档位同时改 density + fontScale（见 Theme.kt 档位表注释）：
+    // 整页已在 DsTheme 的 LocalDensity 覆盖下，这里直接用 1f 让预览文字就是真实字号
+    val scale = 1f
 
     Column(Modifier.fillMaxSize()) {
         Column(

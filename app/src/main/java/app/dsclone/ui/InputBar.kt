@@ -138,14 +138,19 @@ private fun Chip(
     val iconSize = DsMetric.chipIcon
     // 官方 pill：宽 93.5dp（实测 x 126..313px = 63..156.5dp）、高 30dp，两颗之间 8dp，
     // 内容水平居中（官方图标墨迹左缘距药丸左 12.5dp、文字右缘距药丸右 12dp）。
+    // 字体大小档位 = 官方 density+fontScale 语义：density 变大的同时 fontScale 可能再放大（最大档 1.35），
+    // 所以药丸不能写死宽度，否则 chip 文字会被 clip 到药丸外（用户实测：调大字体后「深度思考」画到外面）。
+    // 官方 chip 是内容自适应（icon + gap + text + 水平内边距），因此这里用 widthIn(min=实测宽度) + 内边距，
+    // 文字仍单行不换行（maxLines=1 / softWrap=false），大字体时药丸整体变宽而不是裁字。
     Row(
         Modifier
-            .width(if (DsLayout.narrow) DsMetric.chipW.dp else tapWidth)
+            .widthIn(min = if (DsLayout.narrow) DsMetric.chipW.dp else tapWidth)
             .height(DsMetric.chipH.dp)
             .clip(shape)
             .border(1.dp, borderCol, shape)
             .background(fill)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -791,27 +796,46 @@ fun AttachmentTileRow(
     onCamera: () -> Unit,
     onGallery: () -> Unit,
     onFile: () -> Unit,
+    recentImages: List<android.net.Uri> = emptyList(),
+    selectedUris: Set<String> = emptySet(),
+    onPickRecent: (android.net.Uri) -> Unit = {},
 ) {
     val ds = LocalDsColors.current
-    // 官方 800dp 窗口下三卡总宽 222×3+7.5×2=681，居中 → 左右各 59dp；窄窗仍用 19dp 内边距
+    // 官方 800dp 窗口下三卡总宽 222×3+7.5×2=681，居中 → 左右各 59dp。
+    // 窄屏（640dp）：官方 2.8.0 打开态实测面板 [11,1248][1269,1733]（density 1.875 → 我们 density 2.0 的等价 dp）：
+    //   缩略图/三块方块的左缘同为 49px = 26.1 官方dp = **24.5 本工程dp**（面板左缘 5.5 + 内边距 19.0），右缘对称，
+    //   所以最近图片条与三块方块共用同一个水平 inset，保证第一条缩略图与「拍照」块左缘在同一条竖线上。
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 700
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(
-                start = if (wide) 59.dp else 19.05.dp,
-                end = if (wide) 59.dp else 19.05.dp,
-                top = 0.dp,
-                // 官方：面板底 2022px=1011dp → 导航栏上沿 2116px=1058dp，空 47dp
-                bottom = 47.dp,
-            ),
-        horizontalArrangement = Arrangement.spacedBy(7.5.dp),
-    ) {
-        // 官方三块图标墨迹：相机 37×33、相册 34×30、回形针 31×35px —— 本工程三个矢量的墨迹/盒比不同，
-        // 所以每个图标单独给盒尺寸（相册图标本身墨迹偏大 → 18.7dp）。
-        AttachTile(R.drawable.ic_camera_outline_20, "拍照", Modifier.weight(1f), onCamera, 20.5.dp)
-        AttachTile(R.drawable.ic_photo_outline_20, "相册", Modifier.weight(1f), onGallery, 19.4.dp)
-        AttachTile(R.drawable.ic_paperclip_outline_20, "文件", Modifier.weight(1f), onFile, 20.5.dp)
+    val hInset = if (wide) 59.dp else 24.5.dp
+    // 必须用 Column 包起来：AttachmentTileRow 在 DsApp 的 AnimatedVisibility 里不是 ColumnScope，
+    // 直接并列 emit 两个 layout 节点会**重叠**（快捷图片条盖在三块方块上）。
+    Column(Modifier.fillMaxWidth()) {
+        // 官方附件面板顶部 = 输入卡下方「最近图片」横滑快捷条（UploadPanelImageScroller）：
+        // 75dp 缩略图 + 24dp 勾选圈，点一张直接加为图片附件（快捷上传）。无权限/无图时不显示。
+        RecentImageStrip(
+            images = recentImages,
+            selected = selectedUris,
+            onToggle = onPickRecent,
+            horizontalInset = hInset,
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = hInset,
+                    end = hInset,
+                    top = 0.dp,
+                    // 官方：面板底 2022px=1011dp → 导航栏上沿 2116px=1058dp，空 47dp
+                    bottom = 47.dp,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(7.5.dp),
+        ) {
+            // 官方三块图标墨迹：相机 37×33、相册 34×30、回形针 31×35px —— 本工程三个矢量的墨迹/盒比不同，
+            // 所以每个图标单独给盒尺寸（相册图标本身墨迹偏大 → 18.7dp）。
+            AttachTile(R.drawable.ic_camera_outline_20, "拍照", Modifier.weight(1f), onCamera, 20.5.dp)
+            AttachTile(R.drawable.ic_photo_outline_20, "相册", Modifier.weight(1f), onGallery, 19.4.dp)
+            AttachTile(R.drawable.ic_paperclip_outline_20, "文件", Modifier.weight(1f), onFile, 20.5.dp)
+        }
     }
 }
 

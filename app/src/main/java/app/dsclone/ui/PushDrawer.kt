@@ -1,5 +1,6 @@
 package com.yuyuyu.deepseek.ui
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,8 +27,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -84,6 +88,21 @@ fun PushDrawer(
     // 官方 scrim：浅色 白 0.70、深色 #292929 0.53（同机像素反解，见文件头）
     val scrimColor = if (dark) Color(0xFF292929) else MaterialTheme.colorScheme.background
     val scrimAlpha = if (dark) 0.53f else 0.70f
+    // 官方「部分设备才有圆角」的条件（2.9.0 反编译）：
+    //   · rememberWindowCornerRadii（WindowCornerRadii.kt:51，smali Lke;->r(Ld45;)La5c;）：
+    //       Build.VERSION.SDK_INT >= 31（0x1f）且 view.rootWindowInsets != null 时，
+    //       读 WindowInsets.getRoundedCorner(0=TOP_LEFT / 1=TOP_RIGHT / 3=BOTTOM_RIGHT / 2=BOTTOM_LEFT).radius（px）；
+    //       否则四个半径全为 0。→ 圆角来自【物理屏幕圆角】，不是宽度类/手势导航/机型分支。
+    //   · 内容层 shape（ModalNavigationDrawer.kt 的 ContentScrim，smali Lmm7;->a 内 mm7.smali:793）：
+    //       RoundedCornerShape(topStart = min(36.dp, 左上圆角.toDp()), topEnd = 0, bottomEnd = 0, bottomStart = 同左)
+    //       —— 只圆 start（左）两角，半径上限 36dp；半径为 0 时就是矩形。
+    //   · A7 是 API 30（<31）→ getRoundedCorner 不可用 → 半径 0 → 官方在这台机器上没有圆角。
+    val windowCorner = rememberWindowCornerRadiusDp()
+    val contentShape: Shape = if (windowCorner > 0.dp) {
+        RoundedCornerShape(topStart = windowCorner, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = windowCorner)
+    } else {
+        RectangleShape
+    }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // 抽屉面板：整块从 -drawerWidth 平移到 0（官方 translationX，不是宽度动画）
@@ -132,8 +151,10 @@ fun PushDrawer(
                 Modifier
                     .fillMaxSize()
                     // 官方：内容层左缘往抽屉上投阴影（实测 255→239，宽约 29.5dp，无模糊）
-                    .shadow(elevation = 18.dp * p, shape = RectangleShape, clip = false)
-                    .background(MaterialTheme.colorScheme.background)
+                    .shadow(elevation = 18.dp * p, shape = contentShape, clip = false)
+                    .background(MaterialTheme.colorScheme.background, contentShape)
+                    // 官方：有物理圆角的设备（API≥31）内容层按 RoundedCornerShape 裁切，左两角圆角
+                    .clip(contentShape)
             ) {
                 content()
             }
@@ -151,6 +172,33 @@ fun PushDrawer(
                         ) { onClose() } else Modifier
                     )
             )
+        }
+    }
+}
+
+/**
+ * 官方 `rememberWindowCornerRadii`（WindowCornerRadii.kt:51；smali `Lke;->r(Ld45;)La5c;` + `La5c;` 四 int 字段
+ * = (topLeft, topRight, bottomRight, bottomLeft) 的**物理屏幕圆角半径，单位 px**）的等价实现：
+ *
+ *  - `Build.VERSION.SDK_INT >= 31` 且 `rootWindowInsets != null` 才能取到，
+ *    否则（如本机 A7 = API 30）四角半径全部为 0；
+ *  - 官方在抽屉内容层把半径按 `min(36.dp, 左上圆角.toDp())` 用作 start 两角的圆角半径。
+ *
+ * 所以「官方侧边栏部分机器才有圆角」= 取决于设备**屏幕是否有圆角**且系统能上报（API 31+），
+ * 与 compact/medium/expanded 宽度类、edge-to-edge、手势导航、RTL 都无关。
+ */
+@Composable
+private fun rememberWindowCornerRadiusDp(): Dp {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    return remember(view, density) {
+        if (Build.VERSION.SDK_INT < 31) {
+            0.dp
+        } else {
+            val px = view.rootWindowInsets
+                ?.getRoundedCorner(android.view.RoundedCorner.POSITION_TOP_LEFT)
+                ?.radius ?: 0
+            with(density) { minOf(36.dp, px.toDp()) }
         }
     }
 }

@@ -167,10 +167,11 @@ object DsMetric {
     const val DRAWER_AVATAR = 30f
 
     // 抽屉断点公式（官方 ChatNavigationDrawerContent.kt:801 = min(326, 0.8×窗口宽)；
-    // 但平板 800dp 窗口实测只有 305dp（audit-drawer.png），故以 305 为上限，公式只用于极窄窗口）
+    // 但平板 800dp 窗口实测只有 305dp（audit-drawer.png），手机 640dp 窗口实测也是 305.5dp
+    // （uiautomator 打开态 [0,0][611,1752]，density=320 → 611px/2=305.5dp），故两个分支统一以 305 为上限，
+    // 公式只用于极窄窗口。此前窄屏写死 265dp 来自一张 font level 非标准档的官方截图（该档改了 densityDpi），已纠正。
     fun drawerWidthDp(windowWidthDp: Int): Float =
-        if (DsLayout.narrow) minOf(265f, windowWidthDp * 0.8f)
-        else minOf(DRAWER_W, windowWidthDp * 0.8f)
+        minOf(DRAWER_W, windowWidthDp * 0.8f)
 
     // 设置页（真机 1600x2176 @2.0 实测）
     const val SET_MARGIN = 40f          // 卡片左右外边距
@@ -459,8 +460,46 @@ private val DarkDs = DsColors(
 
 val LocalDsColors = staticCompositionLocalOf { LightDs }
 
-/** 官方字体大小滑块的 5 档（跟随系统开启时用系统 fontScale） */
-val DsFontScales = floatArrayOf(0.85f, 0.93f, 1.00f, 1.12f, 1.25f)
+/**
+ * 官方字体大小档位（FontSizeManager）—— 反编译出处：
+ *
+ *  · 档位表 `du4.smali:<clinit>`（FontSizeLevel）：内部 7 档 level = -2..4，
+ *    每档 `zt4(densityDpi 增量 I, fontSizeScale F, 系统 fontScale 阈值 F)`：
+ *      -2 → dpi 增量 -3，scale 1.00，阈值 0.8
+ *      -1 → -2，1.00，0.9
+ *       0 → -1，1.00，1.01
+ *       1 →  0，1.00，1.1
+ *       2 → +1，1.00，1.2
+ *       3 → +1，1.20，1.4
+ *       4 → +1，1.35，1.6
+ *  · 合法 densityDpi 步进表 `cu4.smali:<clinit>` 的 `cu4.e:[I` =
+ *      [120,140,160,180,200,213,220,240,260,280,300,320,340,360,400,420,440,480,520,560,600,640]
+ *    `bu4.<init>(IIF)`：以系统 densityDpi 在该表里二分定位，再加档位增量 → 本档 densityDpi；
+ *    highDpi（max(xdpi,ydpi)>460）再 +1 个步进。
+ *  · 应用 `cu4.c(int,Context)`（FontSizeManager.apply）：
+ *      DisplayMetrics.density = densityDpi / 160f
+ *      DisplayMetrics.scaledDensity = density * fontSizeScale
+ *      Configuration.fontScale = fontSizeScale
+ *    → **每档同时改 densityDpi 与 fontScale**：整个 UI（间距/图标/控件）一起缩放，不只是字形。
+ *  · 默认档位 `bu4.<init>`：跟随系统时按系统 fontScale 落在哪个阈值区间选档
+ *      （第一个 threshold >= fontScale 的档，全都不满足时 fontScale>1 取 4、否则取 -2）。
+ *
+ * 本工程此前只改 fontScale（0.85/0.93/1.00/1.12/1.25），所以「底部输入栏不随字体大小变」，
+ * 与官方不一致。这里改成官方语义：5 个 UI 档位映射到官方 7 档中的 5 个代表档
+ * （下标 0/1/2/4/6 → level -2/-1/0/2/4），并且把**标准档**锚定为官方 level 0（300dpi）——
+ * 本工程所有 dp 参数都是在官方「标准」下按像素对齐的，锚定后标准档像素不变，其它档整体缩放。
+ */
+private val DsOfficialFontDpi = intArrayOf(260, 280, 300, 320, 340, 340, 340)
+private val DsOfficialFontScale = floatArrayOf(1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.20f, 1.35f)
+/** 官方 7 档的系统 fontScale 阈值（用于「跟随系统」时选默认档） */
+private val DsOfficialFontThresholds = floatArrayOf(0.8f, 0.9f, 1.01f, 1.1f, 1.2f, 1.4f, 1.6f)
+/** 本工程 5 个 UI 档位 → 官方 7 档下标（特小/小/标准/大/特大） */
+private val DsFontLevelToOfficial = intArrayOf(0, 1, 2, 4, 6)
+/** 官方 level 0 的 densityDpi；本工程像素参数以它为基准 */
+private const val DS_FONT_BASE_DPI = 300f
+
+/** 官方字体大小滑块的有效字号比例（相对标准档，仅用于显示/预览说明） */
+val DsFontScales = floatArrayOf(0.867f, 0.933f, 1.00f, 1.133f, 1.53f)
 val DsFontLevelNames = arrayOf("特小", "小", "标准", "大", "特大")
 
 /**
@@ -557,25 +596,31 @@ fun DsTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Un
         )
     }
 
-    // 字体大小：跟随系统时用系统 fontScale；否则用 5 档固定比例
+    // 字体大小（官方 FontSizeManager 语义：同时改 density + fontScale，见文件上方档位表注释）
     val base = LocalDensity.current
-    val follow = DsAppearance.followSystemFont.value
-    // 跟随系统时这里必须是 1f：系统缩放已经由 base.fontScale 带上了；
-    // 若这里再取 base.fontScale，会和下面的 base.fontScale * fs 相乘，
-    // 等于把系统字号平方放大（1.3 → 1.69），字直接爆炸。
-    val fs = if (follow) {
-        1f
-    } else {
-        DsFontScales[DsAppearance.fontLevel.value.coerceIn(0, 4)]
-    }
+    val followSystem = DsAppearance.followSystemFont.value
+    // 选档：
+    //  · 跟随系统 → 官方 2.8.0 实测三档系统 font_scale 逐像素一致（App 每次都会用自己保存的字号档
+    //    重新覆盖 Configuration.fontScale，见 cu4.c(int,Context)），因此这里固定用「标准」档，
+    //    不让系统 fontScale 影响布局（否则今天会把本机 font_scale=0.8 的机器整体缩小 13%）。
+    //  · 非跟随 → 用户选的 5 档之一，映射到官方 7 档下标 0/1/2/4/6。
+    val officialIdx = if (followSystem) 2
+    else DsFontLevelToOfficial[DsAppearance.fontLevel.value.coerceIn(0, 4)]
+    val levelDpi = DsOfficialFontDpi[officialIdx]
+    val levelFs = DsOfficialFontScale[officialIdx]
+    // density = 系统 density × (本档 dpi / 标准档 dpi)：标准档像素与改动前完全一致，
+    // 其它档按官方 dpi 比例整体缩放（dp 与 sp 一起变，对应官方「整个 UI 缩放」）。
+    val dsDensity = Density(
+        density = base.density * (levelDpi / DS_FONT_BASE_DPI),
+        fontScale = levelFs,
+    )
 
     CompositionLocalProvider(
         LocalDsColors provides if (darkOn) DarkDs else LightDs,
         // 去掉 Material 默认的水波纹：官方点按钮没有那层「浅黑」按压遮罩，
         // 我们这里默认 ripple 是 12% 黑色，点一下整块按钮都会暗一下，看着像 bug。
         androidx.compose.material3.LocalRippleConfiguration provides null,
-        // 必须乘上系统自身的 fontScale，否则「跟随系统」会被这一层抹平
-        LocalDensity provides Density(base.density, base.fontScale * fs),
+        LocalDensity provides dsDensity,
     ) {
         MaterialTheme(colorScheme = scheme, typography = dsTypography(), content = content)
     }
