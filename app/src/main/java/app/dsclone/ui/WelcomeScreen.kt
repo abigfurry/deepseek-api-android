@@ -93,35 +93,14 @@ fun WelcomeScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // 欢迎页中间那个「鲸鱼」= App 图标本身（自适应图标的两层）：
-            // 底层蓝紫渐变（whale_grad.xml: #5D78FE → #3E5FFE，angle 0），上层白色鲸鱼前景 ic_whale_fg。
-            // 注意：<gradient> 资源不能用 painterResource 画（会抛异常导致启动崩溃），
-            // 所以渐变用 Compose Brush 复现同样的两个色标。
-            Box(
-                Modifier
-                    .size(120.dp)
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(26.dp))
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            listOf(
-                                androidx.compose.ui.graphics.Color(0xFF5D78FE),
-                                androidx.compose.ui.graphics.Color(0xFF3E5FFE),
-                            )
-                        )
-                    )
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.ic_whale_fg),
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    // ic_whale_fg 里的鲸鱼是渐变填充（fillColor=@drawable/whale_grad），
-                    // 直接叠在渐变底上几乎看不见；App 图标里鲸鱼是白色的，所以这里统一染白。
-                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
-                        androidx.compose.ui.graphics.Color.White
-                    ),
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            // 官方欢迎页只显示「鲸鱼」本体，**没有**蓝色圆角方块背景（那是桌面图标才有的底）。
+            // 所以这里直接画 ic_whale_fg（它自身就是渐变填充的鲸鱼），不加底色、不额外染色。
+            Image(
+                painter = painterResource(R.drawable.ic_whale_fg),
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                modifier = Modifier.size(120.dp),
+            )
             // 官方 Spacer(20.dp)
             Spacer(Modifier.height(20.dp))
             // 官方问候语样式：20sp / 行高 28sp / W600，居中
