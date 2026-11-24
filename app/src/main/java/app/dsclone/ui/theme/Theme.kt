@@ -227,7 +227,7 @@ object DsMetric {
     /** 操作行图标：官方窄屏 16.5（ui 墨迹 16.5） */
     val actionIcon: Float get() = if (DsLayout.narrow) 16.5f else ACTION_ICON
     /** 操作行左右外扩：官方窄屏 11.25（行盒 21.25..618.75 vs 正文 32.5..607.5） */
-    val actionPadStart: Float get() = if (DsLayout.narrow) 11.25f else ACTION_PAD_START
+    val actionPadStart: Float get() = if (DsLayout.narrow) 8.0f else 0f
     val actionPadEnd: Float get() = if (DsLayout.narrow) 11.25f else ACTION_PAD_END
     /** 操作行左侧内缩：官方窄屏 5.25（首个图标墨迹 35 = 21.25 + 5.25 + 8 居中偏移） */
     val actionLeadIn: Float get() = if (DsLayout.narrow) 5.25f else 0f
