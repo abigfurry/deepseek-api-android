@@ -134,6 +134,7 @@ internal fun SettingsSubPage(
 @Composable
 private fun ApiPage(s: Settings, onChange: (Settings) -> Unit, onToast: (String) -> Unit) {
     val ctx = LocalContext.current
+    var showApiGuide by remember { mutableStateOf(false) }
     val busy = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     val hint = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     val balanceHint = com.yuyuyu.deepseek.data.balanceCacheEntry(s.balanceCache[s.providerId])?.text ?: ""
@@ -173,6 +174,13 @@ private fun ApiPage(s: Settings, onChange: (Settings) -> Unit, onToast: (String)
                 value = s.preset.name,
                 chevron = true,
                 onClick = { openUrl(ctx, providerKeyUrl(s.preset)) },
+            )
+            // 使用教程：拿 Key / 充值 / 常见报错（应用内弹窗）
+            SettingRow(
+                label = "API 使用教程",
+                value = "拿 Key · 充值 · 报错",
+                chevron = true,
+                onClick = { showApiGuide = true },
             )
         }
         DsSupporting("Key 在各家服务商控制台免费申请，只保存在本机。")
@@ -397,6 +405,7 @@ private fun ApiPage(s: Settings, onChange: (Settings) -> Unit, onToast: (String)
         DsSupporting("修改会立刻生效，返回上一页时自动保存到本机。")
         Spacer(Modifier.height(36.dp))
     }
+    if (showApiGuide) ApiGuideDialog(onDismiss = { showApiGuide = false })
 }
 
 // =====================================================================================
