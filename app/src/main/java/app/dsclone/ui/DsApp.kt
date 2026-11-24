@@ -25,6 +25,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -66,6 +68,54 @@ import androidx.compose.ui.layout.layout
 /** 流式文本最多每这么久合并提交一次 UI（33ms ≈ 30fps；再快肉眼无收益，纯烧主线程）。 */
 private const val STREAM_UI_FRAME_MS = 33L
 
+/** 一次保存请求；done 非空时调用方可以等写盘结束（导入/导出用）。
+ *  拆分存储后只写「脏」会话文件 + 小索引，不再每次重写整库。 */
+private data class SaveRequest(
+    val list: List<Session>,
+    val dirty: Set<String> = emptySet(),
+    val deleted: Set<String> = emptySet(),
+    val full: Boolean = false,
+    val done: kotlinx.coroutines.CompletableDeferred<Boolean>? = null,
+)
+
+/**
+ * 导入官方导出包时按堆大小算「最多能装多少字符」。
+ *
+ * 实测（A8 平板，largeHeap 512MB）：导入 1235 会话 / 4510 万字符后，App 常驻 Java 堆约 125MB，
+ * 但**启动加载**（readText 成正文字符串 + org.json 建树）峰值到过 371MB ≈ 8.2 字节/字符。
+ * 取 10 字节/字符留余量：512MB 堆 → 约 5000 万字符（能完整装下这份 4510 万字的包），
+ * 256MB 堆 → 约 2500 万字符（超出部分不导入，避免 OOM）。
+ */
+private fun heapCharBudget(): Int {
+    val max = Runtime.getRuntime().maxMemory()
+    return (max / 10).toInt().coerceIn(4_000_000, 60_000_000)
+}
+
+/** 有上限地读文本文件（本 App 导出的 JSON 一般几 MB，官方包走 ZIP 分支不会走这里）。 */
+private fun readTextLimited(ins: java.io.InputStream, maxBytes: Int): String {
+    val bos = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+        val n = ins.read(buf)
+        if (n <= 0) break
+        if (total + n > maxBytes) break
+        bos.write(buf, 0, n)
+        total += n
+    }
+    return String(bos.toByteArray(), Charsets.UTF_8)
+}
+
+/** ZIP / JSON 两条导入路径的统一结果。 */
+private data class ImportPayload(
+    val sessions: List<Session>,
+    val totalSessions: Int = 0,
+    val skippedSessions: Int = 0,
+    val truncatedMessages: Int = 0,
+    val truncatedSessions: Int = 0,
+    val zip: Boolean = false,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DsApp() {
@@ -89,12 +139,93 @@ fun DsApp() {
     val streamUi = remember { StreamUi() }
 
     var settings by remember { mutableStateOf(Store.loadSettings(ctx)) }
-    val sessions = remember {
-        mutableStateListOf<Session>().also { it.addAll(Store.loadSessions(ctx)) }
+    // 历史记录可能很大（导入官方包后实测 1235 会话 / 2.3 万条消息 / 4500 万字正文）：
+    // 在后台线程读，读完之前盖一层「正在加载」遮罩 —— 既避免首帧主线程解析几十 MB JSON 触发 ANR，
+    // 也防止用户在空列表上新建对话，把还没读出来的历史覆盖掉。
+    val sessions = remember { mutableStateListOf<Session>() }
+    var loadingSessions by remember { mutableStateOf(true) }
+    // 懒加载模式下：索引已读、界面可用的标志；后台把消息补齐后才算 historyReady（全局搜索用）
+    var historyReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // 0) 旧版单文件 sessions.json → 拆分存储（仅第一次，原文件保留为 .bak）
+        withContext(Dispatchers.IO) { Store.migrateToSplit(ctx) }
+        // 1) 只读小索引：历史再大也是毫秒级
+        val index = withContext(Dispatchers.IO) { Store.loadSplitIndex(ctx) }
+        sessions.addAll(index)
+        if (settings.preloadHistory) {
+            // 设置里开了「启动时预加载全部历史」：和旧版一样，读完再进界面（搜索最快）
+            val full = withContext(Dispatchers.IO) { Store.loadAllMessages(ctx, index) }
+            sessions.clear()
+            sessions.addAll(full)
+            historyReady = true
+            loadingSessions = false
+        } else {
+            // 默认：秒进界面，消息在后台静默补齐（打开会话时另有按需加载，见 currentId 的 LaunchedEffect）
+            loadingSessions = false
+            val loadedMap = withContext(Dispatchers.IO) {
+                index.associate { it.id to Store.loadSessionMessages(ctx, it.id) }
+            }
+            for (i in sessions.indices) {
+                val s = sessions[i]
+                if (!s.loaded) {
+                    val msgs = loadedMap[s.id]
+                    if (msgs != null) sessions[i] = s.copy(messages = msgs, loaded = true)
+                }
+            }
+            historyReady = true
+        }
+    }
+
+    // 保存队列（单消费者 + 主动合并）：只写改过的会话文件 + 索引。
+    // 用 UNLIMITED 而不是 CONFLATED：persistNow() 要等写盘完成，CONFLATED 会把带回调的请求覆盖掉。
+    val saveQueue = remember { kotlinx.coroutines.channels.Channel<SaveRequest>(kotlinx.coroutines.channels.Channel.UNLIMITED) }
+    val pendingDirty = remember { HashSet<String>() }
+    val pendingDeleted = remember { HashSet<String>() }
+    LaunchedEffect(Unit) {
+        for (first in saveQueue) {
+            var req = first
+            // 合并紧随其后的请求：脏集合取并集，只写最后一份快照
+            while (true) {
+                val next = saveQueue.tryReceive().getOrNull() ?: break
+                req.done?.complete(true)
+                req = SaveRequest(
+                    list = next.list,
+                    dirty = req.dirty + next.dirty,
+                    deleted = req.deleted + next.deleted,
+                    full = req.full || next.full,
+                    done = next.done,
+                )
+            }
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    if (req.full) {
+                        Store.saveAllSplit(ctx, req.list)
+                    } else {
+                        for (id in req.deleted) Store.deleteSessionFile(ctx, id)
+                        for (id in req.dirty) {
+                            req.list.firstOrNull { it.id == id }?.let { Store.saveSessionFile(ctx, it) }
+                        }
+                        Store.saveSplitIndex(ctx, req.list)
+                    }
+                }.isSuccess
+            }
+            req.done?.complete(ok)
+        }
     }
     var jumpToMessageId by remember { mutableStateOf(-1L) }
     // 启动态：null = 欢迎页（不自动进入上次对话，对齐官方"每次打开都是新对话"）
     var currentId by remember { mutableStateOf<String?>(null) }
+    // 按需加载：打开一个还没读消息的会话时单独读它（后台预加载可能还没轮到）
+    LaunchedEffect(currentId) {
+        val id = currentId ?: return@LaunchedEffect
+        val s = sessions.firstOrNull { it.id == id } ?: return@LaunchedEffect
+        if (s.loaded) return@LaunchedEffect
+        val msgs = withContext(Dispatchers.IO) { Store.loadSessionMessages(ctx, id) }
+        val i = sessions.indexOfFirst { it.id == id }
+        if (i >= 0 && !sessions[i].loaded) {
+            sessions[i] = sessions[i].copy(messages = msgs, loaded = true)
+        }
+    }
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Msg?>(null) }
@@ -114,11 +245,15 @@ fun DsApp() {
     val launchPhone = remember {
         ((ctx as? android.app.Activity)?.intent?.getBooleanExtra("phone", false)) ?: false
     }
+    // 调试用：--ez setup true 强制打开开屏页（截图 / 检查教程入口用，不清本地 Key 和会话）
+    val launchSetup = remember {
+        ((ctx as? android.app.Activity)?.intent?.getBooleanExtra("setup", false)) ?: false
+    }
     // 只有「一个 Key 都没有」的首次启动才弹登录页。
     // 之前判断的是 settings.apiKey（= 当前服务商的 Key），于是只要切到一家还没填 Key 的服务商，
     // 重启就直接掉回登录界面 —— 主界面整个变成登录页，这就是「主界面 UI 都不同了」。
     var showLogin by remember {
-        mutableStateOf(!launchPhone && settings.keys.values.none { it.isNotBlank() })
+        mutableStateOf(launchSetup || (!launchPhone && settings.keys.values.none { it.isNotBlank() }))
     }
     var showPhone by remember { mutableStateOf(launchPhone) }
     var showSettings by remember { mutableStateOf(false) }
@@ -214,17 +349,22 @@ fun DsApp() {
     remember(wantDemo) {
         if (wantDemo && sessions.none { it.title == "格式演示" }) {
             val body = """
-## 代码?```kotlin
+## 代码
+```kotlin
 fun main() {
     println("Hello DeepSeek")
 }
 ```
-## 
+
+## 公式
 $$
 \int_0^1 x^2\,dx = \frac{1}{3}
 $$
+
 ## 列表
-- ?- ?""".trimIndent()
+- 第一项
+- 第二项
+""".trimIndent()
             val demoId = "demo-" + System.currentTimeMillis()
             sessions.add(
                 0,
@@ -249,15 +389,42 @@ $$
         (current?.messages?.sumOf { estimateTokens(it.text) } ?: 0) + estimateTokens(input)
     }
 
-    fun persist() {
-        Store.saveSessions(ctx, sessions.toList())
+    /**
+     * 写盘：只写「改过的会话文件 + 小索引」。
+     * @param id 消息内容变了的会话（必须传，否则消息不会落盘）；只改标题/置顶可以不传。
+     */
+    fun persist(id: String? = null) {
+        if (id != null) pendingDirty.add(id)
+        val req = SaveRequest(sessions.toList(), pendingDirty.toSet(), pendingDeleted.toSet())
+        pendingDirty.clear()
+        pendingDeleted.clear()
+        saveQueue.trySend(req)
     }
 
-    /**
-     * 导入聊天记录：用?Store.loadSessions 完全相同?Store.parseSessions 解析?     * ?session.id 去重合并（同 id 覆盖，不?id 追加到列表最前面），
-     * 然后持久化并刷新界面。返回文件里的会话数? = 解析失败 / 没有会话?     */
-    fun importSessions(json: String): Int {
-        val parsed = Store.parseSessions(json)
+    /** 删除会话：索引 + 删掉它的消息文件。 */
+    fun persistDeleted(id: String) {
+        pendingDeleted.add(id)
+        pendingDirty.remove(id)
+        val req = SaveRequest(sessions.toList(), pendingDirty.toSet(), pendingDeleted.toSet())
+        pendingDirty.clear()
+        pendingDeleted.clear()
+        saveQueue.trySend(req)
+    }
+
+    /** 全量重写所有会话文件（导入 / 迁移用）。 */
+    fun persistFull() {
+        saveQueue.trySend(SaveRequest(sessions.toList(), full = true))
+    }
+
+    /** 写盘并等待完成（导入 / 导出这种不能丢数据的场景用）。 */
+    suspend fun persistNow() {
+        val done = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        saveQueue.send(SaveRequest(sessions.toList(), full = true, done = done))
+        done.await()
+    }
+
+    /** 把解析好的会话合并进当前列表（同 id 覆盖，新 id 追加到最前面）；返回合并的会话数。 */
+    fun mergeSessions(parsed: List<Session>): Int {
         if (parsed.isEmpty()) return 0
         val incoming = LinkedHashMap<String, Session>()
         for (s in parsed) incoming[s.id] = s
@@ -268,11 +435,177 @@ $$
         }
         val added = incoming.filterKeys { it !in existingIds }.values.toList()
         if (added.isNotEmpty()) sessions.addAll(0, added)
-        persist()
+        return parsed.size
+    }
+
+    /**
+     * 导入本 App 导出的 JSON 文本；解析失败再走容错适配器。
+     * 返回文件里的会话数；0 = 解析失败 / 没有会话。
+     */
+    fun importSessions(json: String): Int {
+        var parsed = Store.parseSessions(json)
+        if (parsed.isEmpty()) {
+            // 不是本 App 的 dsclone-chats.json：再试官方 App 导出包 / 其它格式（容错适配器）
+            parsed = com.yuyuyu.deepseek.data.OfficialImport.parse(json)
+        }
+        if (parsed.isEmpty()) return 0
+        val n = mergeSessions(parsed)
+        persistFull()
         if (currentId == null || sessions.none { it.id == currentId }) {
             currentId = sessions.firstOrNull()?.id
         }
-        return parsed.size
+        return n
+    }
+
+    // 导入 / 导出的阻塞式进度（导入官方 261MB 包要几十秒，必须给反馈）
+    var busyTitle by remember { mutableStateOf("") }
+    var busyText by remember { mutableStateOf("") }
+
+    fun toast(msg: String) {
+        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 从系统文件选择器选中的文件导入。按文件头区分两条路：
+     *  - `PK\x03\x04` → 官方 App 导出的 ZIP（流式解析，见 OfficialImport.parseZip）
+     *  - 其它 → 本 App 导出的 dsclone-chats.json（或容错适配器支持的 JSON）
+     * 全部读盘 / 解析在 IO 线程，合并会话在主线（sessions 是 Compose SnapshotStateList）。
+     */
+    fun importFromUri(uri: android.net.Uri) {
+        if (busyTitle.isNotEmpty()) return
+        busyTitle = I18n.t("正在导入聊天记录", "Importing chats")
+        busyText = I18n.t("正在读取文件…", "Reading file…")
+        scope.launch {
+            val payload = withContext(Dispatchers.IO) {
+                runCatching<ImportPayload> {
+                    val cr = ctx.contentResolver
+                    // 只读文件头判断类型：官方包 261MB，不能先整个读成 String 再判断
+                    val head = cr.openInputStream(uri)?.use { ins ->
+                        val b = ByteArray(4)
+                        var n = 0
+                        while (n < 4) {
+                            val r = ins.read(b, n, 4 - n)
+                            if (r <= 0) break
+                            n += r
+                        }
+                        if (n == 4) b else b.copyOf(n)
+                    } ?: ByteArray(0)
+                    if (com.yuyuyu.deepseek.data.OfficialImport.isZip(head)) {
+                        val limits = com.yuyuyu.deepseek.data.OfficialImport.Limits(
+                            maxTotalChars = heapCharBudget(),
+                        )
+                        // 先拷到 cacheDir 再用 ZipFile 随机读：官方包里 205MB 是附件本体，
+                        // 走流式 ZipInputStream 即使跳过也要把它们全部解压一遍。
+                        val tmp = java.io.File(ctx.cacheDir, "official-import.zip")
+                        try {
+                            val source = cr.openInputStream(uri) ?: error("无法打开文件")
+                            source.use { ins ->
+                                tmp.outputStream().buffered(256 * 1024).use { out ->
+                                    val buf = ByteArray(256 * 1024)
+                                    var copied = 0L
+                                    var lastPost = 0L
+                                    while (true) {
+                                        val r = ins.read(buf)
+                                        if (r <= 0) break
+                                        out.write(buf, 0, r)
+                                        copied += r
+                                        // 每读 16MB 更新一次进度（261MB 的包拷盘要几秒）
+                                        if (copied - lastPost >= 16L * 1024 * 1024) {
+                                            lastPost = copied
+                                            val mb = copied / 1024 / 1024
+                                            main.post {
+                                                busyText = I18n.t(
+                                                    "正在读取导出包（$mb MB）…",
+                                                    "Reading export ($mb MB)…"
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            val result = com.yuyuyu.deepseek.data.OfficialImport.parseZip(tmp, limits) { done, total ->
+                                main.post {
+                                    busyText = if (total > 0) {
+                                        I18n.t("已解析 $done / $total 个会话", "Parsed $done / $total chats")
+                                    } else {
+                                        I18n.t("已解析 $done 个会话", "Parsed $done chats")
+                                    }
+                                }
+                            }
+                            ImportPayload(
+                                sessions = result.sessions,
+                                totalSessions = result.totalSessions,
+                                skippedSessions = result.skippedSessions,
+                                truncatedMessages = result.truncatedMessages,
+                                truncatedSessions = result.truncatedSessions,
+                                zip = true,
+                            )
+                        } finally {
+                            runCatching { tmp.delete() }
+                        }
+                    } else {
+                        // 先按本 App 的 sessions.json 流式解析：自己导出的文件可能有 100MB，
+                        // 先 readText 会多占 200MB 堆。解析不出会话再退回「任意 JSON」文本适配器。
+                        val parsed = runCatching {
+                            cr.openInputStream(uri)?.use { Store.parseSessions(it) } ?: emptyList()
+                        }.getOrDefault(emptyList())
+                        if (parsed.isNotEmpty()) {
+                            ImportPayload(sessions = parsed)
+                        } else {
+                            val text = cr.openInputStream(uri)
+                                ?.use { readTextLimited(it, 64 * 1024 * 1024) } ?: ""
+                            ImportPayload(sessions = com.yuyuyu.deepseek.data.OfficialImport.parse(text))
+                        }
+                    }
+                }
+            }
+            val p = payload.getOrNull()
+            if (p == null || p.sessions.isEmpty()) {
+                busyTitle = ""
+                toast(I18n.t("导入失败：无法识别这个文件", "Import failed: unrecognized file"))
+                return@launch
+            }
+            val n = mergeSessions(p.sessions)
+            busyText = I18n.t("正在保存到本机…", "Saving…")
+            persistNow()
+            busyTitle = ""
+            if (currentId == null || sessions.none { it.id == currentId }) {
+                currentId = sessions.firstOrNull()?.id
+            }
+            val extra = buildString {
+                if (p.zip && p.totalSessions > 0) {
+                    append(I18n.t("（导出包共 ${p.totalSessions} 个会话）", " (${p.totalSessions} chats in package)"))
+                }
+                if (p.skippedSessions > 0) {
+                    append(I18n.t("，跳过 ${p.skippedSessions} 个", ", ${p.skippedSessions} skipped"))
+                }
+                if (p.truncatedSessions > 0) {
+                    append(I18n.t("，${p.truncatedSessions} 个会话超长已截断", ", ${p.truncatedSessions} chats truncated"))
+                }
+                if (p.truncatedMessages > 0) {
+                    append(I18n.t("，${p.truncatedMessages} 条消息超长已截断", ", ${p.truncatedMessages} messages truncated"))
+                }
+            }
+            toast(I18n.t("已导入 $n 个会话", "Imported $n chats") + extra)
+        }
+    }
+
+    /** 导出聊天记录到 SAF 给的 Uri（流式写，几千万字的会话也不会先拼成一个大 String）。 */
+    fun exportToUri(uri: android.net.Uri) {
+        if (busyTitle.isNotEmpty()) return
+        busyTitle = I18n.t("正在导出聊天记录", "Exporting chats")
+        busyText = I18n.t("共 ${sessions.size} 个会话", "${sessions.size} chats")
+        val snapshot = sessions.toList()
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    ctx.contentResolver.openOutputStream(uri)?.use { Store.exportSplitSessions(ctx, it, snapshot) }
+                        ?: error("openOutputStream 返回 null")
+                }.isSuccess
+            }
+            busyTitle = ""
+            toast(I18n.t(if (ok) "已导出" else "导出失败", if (ok) "Exported" else "Export failed"))
+        }
     }
 
     fun patch(sessionId: String, msgId: Long, block: (Msg) -> Msg) {
@@ -308,11 +641,13 @@ $$
         botMsg: Msg,
         history: List<Msg>,
         images: List<String> = emptyList(),
+        initialText: String = "",
+        noThinking: Boolean = false,
     ) {
         sending = true
         val startedAt = System.currentTimeMillis()
         val lock = Any()
-        val accText = StringBuilder()
+        val accText = StringBuilder(initialText)
         val accReason = StringBuilder()
         val pendText = StringBuilder()
         val pendReason = StringBuilder()
@@ -404,7 +739,7 @@ $$
         }
 
         activeCall = Client.chat(
-            settings = settings,
+            settings = if (noThinking) settings.copy(thinking = false) else settings,
             history = history,
             onDelta = { content, reasoning -> enqueueDelta(content, reasoning) },
             onDone = {
@@ -424,7 +759,7 @@ $$
                         ).syncActiveVariant()
                     }
                     sending = false
-                    persist()
+                    persist(sessionId)
                 }
             },
             onSteps = { steps, rawCalls, citations -> enqueueSteps(steps, rawCalls, citations) },
@@ -440,12 +775,13 @@ $$
                                 citations = if (stopped.citations.isEmpty()) m.citations else stopped.citations,
                                 streaming = false,
                                 error = false,
+                                stopped = true,
                                 text = if (stopped.text.isBlank()) m.text else stopped.text,
                             ).syncActiveVariant()
                         }
                         sending = false
                         userStopped = false
-                        persist()
+                        persist(sessionId)
                         return@post
                     }
                     val finalMsg = finish()
@@ -462,7 +798,7 @@ $$
                         ).syncActiveVariant()
                     }
                     sending = false
-                    persist()
+                    persist(sessionId)
                 }
             },
             imageDataUrls = images,
@@ -614,11 +950,34 @@ $$
     }
 
     /** 分支切换：纯把内容写?text/reasoning，绝不重新发请求 */
-    fun switchVariant(msg: Msg, index: Int) {
-        if (index !in msg.variants.indices) return
+    fun switchVariant(msg: Msg, index: Int) {        if (index !in msg.variants.indices) return
         val sid = currentId ?: return
         patch(sid, msg.id) { it.switchVariant(index) }
-        persist()
+        persist(sid)
+    }
+
+    /** 继续生成：保留已生成内容，把历史（含一条「继续」）再发一次，新开一条回答接着写 */
+    fun continueFrom(m: Msg) {
+        val sid = currentId ?: return
+        if (sending) return
+        val si = sessions.indexOfFirst { it.id == sid }
+        if (si < 0) return
+        val s = sessions[si]
+        val idx = s.messages.indexOfFirst { it.id == m.id }
+        if (idx < 0) return
+        // 官方做法：把半截回答留在上下文里 + 一条隐藏指令让模型接着写（不显示这条用户消息），
+        // 这次请求关掉 thinking；生成结果**追加到原消息**，不新开气泡。
+        val partial = s.messages[idx]
+        val history = s.messages.take(idx + 1).map {
+            if (it.id == m.id) it.copy(stopped = false, streaming = false) else it
+        } + Msg(
+            role = "user",
+            text = "接着上面未写完的内容直接继续写，不要重复已经写过的部分，不要重新思考，也不要输出思考过程。",
+        )
+        val bot = partial.copy(stopped = false, streaming = true)
+        val msgs = s.messages.toMutableList().also { it[idx] = bot }
+        sessions[si] = s.copy(messages = msgs, updatedAt = System.currentTimeMillis())
+        runChat(s.id, bot, history, initialText = partial.text, noThinking = true)
     }
 
     fun deleteFrom(msg: Msg) {
@@ -627,7 +986,7 @@ $$
         if (idx < 0) return
         val si = sessions.indexOfFirst { it.id == s.id }
         sessions[si] = s.copy(messages = s.messages.take(idx))
-        persist()
+        persist(s.id)
     }
 
     val drawer: @Composable () -> Unit = {
@@ -635,6 +994,7 @@ $$
             sessions = sessions,
             currentId = currentId,
             settings = settings,
+            historyReady = historyReady,
             onSelect = { id ->
                 // 官方双栏布局下点会话换右边内容，侧边栏保持展
                 currentId = id
@@ -647,7 +1007,7 @@ $$
             onDelete = { s ->
                 sessions.remove(s)
                 if (currentId == s.id) currentId = sessions.firstOrNull()?.id
-                persist()
+                persistDeleted(s.id)
             },
             onRename = { s, name ->
                 val i = sessions.indexOfFirst { it.id == s.id }
@@ -768,6 +1128,7 @@ $$
                                     onSwitchVariant = { m, i -> switchVariant(m, i) },
                                     onDeleteFrom = { deleteFrom(it) },
                                     onShowContext = { showContext = true },
+                                    onContinue = { continueFrom(it) },
                                 )
                             }
                         }
@@ -1054,9 +1415,9 @@ $$
                     Store.saveSettings(ctx, s)
                     showSettings = false
                 },
-                // 数据管理 ?导出 / 导入聊天记录
-                sessionsJson = { Store.sessionsJson(sessions.toList()) },
-                onImportSessions = { json -> importSessions(json) },
+                // 数据管理 → 导出 / 导入聊天记录（导出流式写，导入支持官方 .zip）
+                onExportUri = { uri -> exportToUri(uri) },
+                onImportUri = { uri -> importFromUri(uri) },
             )
         }
 
@@ -1092,6 +1453,16 @@ $$
                 messages = current?.messages ?: emptyList(),
                 onDismiss = { showContext = false },
             )
+        }
+
+        // 导入 / 导出 / 启动加载：盖一层不可取消的进度框（否则用户在导入中途操作会改到会话列表）
+        if (loadingSessions) {
+            BusyDialog(
+                title = I18n.t("正在加载聊天记录", "Loading chats"),
+                text = I18n.t("历史记录较多时需要几秒钟…", "A large history may take a few seconds…"),
+            )
+        } else if (busyTitle.isNotEmpty()) {
+            BusyDialog(title = busyTitle, text = busyText)
         }
     }
 
@@ -1176,4 +1547,34 @@ $$
         // 官方样式：附件菜单是输入卡下方的三块方按?AttachmentTileRow 渲染
     }
 
+}
+
+/**
+ * 阻塞式进度对话框（启动加载 / 导入 / 导出）。
+ * 不可取消：这几种操作的中间态不完整，让用户中途点掉只会把会话列表改坏。
+ */
+@Composable
+private fun BusyDialog(title: String, text: String) {
+    val ds = com.yuyuyu.deepseek.ui.theme.LocalDsColors.current
+    androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(ds.cardBg)
+                .padding(horizontal = 24.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(28.dp),
+                strokeWidth = 3.dp,
+            )
+            Spacer(Modifier.size(14.dp))
+            Text(title, fontSize = 16.sp, color = ds.bodyText)
+            if (text.isNotBlank()) {
+                Spacer(Modifier.size(6.dp))
+                Text(text, fontSize = 13.sp, color = ds.secondary)
+            }
+        }
+    }
 }

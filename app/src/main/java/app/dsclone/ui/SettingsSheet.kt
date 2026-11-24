@@ -198,9 +198,9 @@ fun SettingsSheet(
     initial: Settings,
     onDismiss: () -> Unit,
     onSave: (Settings) -> Unit,
-    // 「数据管理 → 导入 / 导出聊天记录」用：由 DsApp 提供当前会话的 JSON 与合并回调
-    sessionsJson: () -> String = { "[]" },
-    onImportSessions: (String) -> Int = { 0 },
+    // 「数据管理 → 导入 / 导出聊天记录」用：DsApp 自己处理 SAF Uri（导出流式写、导入支持 .zip）
+    onExportUri: (android.net.Uri) -> Unit = {},
+    onImportUri: (android.net.Uri) -> Unit = {},
 ) {
     val ds = LocalDsColors.current
     val ctx = LocalContext.current
@@ -355,8 +355,8 @@ fun SettingsSheet(
                         onNavigate = navigate,
                         onDialog = { dialog = it },
                         onToast = showToast,
-                        sessionsJson = sessionsJson,
-                        onImportSessions = onImportSessions,
+                        onExportUri = onExportUri,
+                        onImportUri = onImportUri,
                     )
                 } else {
                     Column(
@@ -380,8 +380,8 @@ fun SettingsSheet(
                                 onNavigate = navigate,
                                 onDialog = { dialog = it },
                                 onToast = showToast,
-                                sessionsJson = sessionsJson,
-                                onImportSessions = onImportSessions,
+                                onExportUri = onExportUri,
+                                onImportUri = onImportUri,
                             )
                         }
                     }

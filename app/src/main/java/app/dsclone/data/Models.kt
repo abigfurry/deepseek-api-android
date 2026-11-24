@@ -68,6 +68,8 @@ data class Msg(
     val text: String = "",
     val reasoning: String = "",
     val error: Boolean = false,
+    /** 用户点了「停止生成」中断的回答（可显示「继续生成」） */
+    val stopped: Boolean = false,
     val streaming: Boolean = false,
     val thinkSeconds: Int = 0,
     /** 这条 user 消息是否带图片，用来显示「正在分析图片」 */
@@ -116,6 +118,13 @@ data class Session(
     val messages: List<Msg> = emptyList(),
     /** 官方侧边栏的「置顶」分组 */
     val pinned: Boolean = false,
+    /**
+     * 消息是否已经加载进内存。启动只读索引时是 false（秒开），
+     * 打开该会话 / 后台预加载后才变 true。不写进磁盘。
+     */
+    val loaded: Boolean = true,
+    /** 索引里记录的消息条数（未加载时用于统计；已加载时 = messages.size） */
+    val msgCount: Int = 0,
 )
 
 /**
@@ -216,6 +225,12 @@ data class Settings(
     val autoFoldThinking: Boolean = true,
     /** 数据管理-数据用于优化体验（官方 profile_imporve_model，默认开） */
     val trainOnData: Boolean = true,
+    /**
+     * 数据管理：启动时是否预加载**全部**历史消息。
+     * false（默认）= 只读索引秒开，打开会话/搜索时再加载；
+     * true = 和旧版一样，启动时把全部消息读进内存（搜索最快，但历史大时进入要等几秒）。
+     */
+    val preloadHistory: Boolean = false,
     /** 语言（官方 app_language，默认跟随系统） */
     val appLanguage: String = "system",
     /**

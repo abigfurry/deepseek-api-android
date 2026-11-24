@@ -99,9 +99,9 @@ internal fun SettingsSubPage(
     onNavigate: (String) -> Unit,
     onDialog: (String) -> Unit,
     onToast: (String) -> Unit,
-    // 「数据管理 → 导入 / 导出聊天记录」：由 DsApp 提供当前会话 JSON 与合并回调
-    sessionsJson: () -> String = { "[]" },
-    onImportSessions: (String) -> Int = { 0 },
+    // 「数据管理 → 导入 / 导出聊天记录」：DsApp 自己处理 SAF Uri
+    onExportUri: (android.net.Uri) -> Unit = {},
+    onImportUri: (android.net.Uri) -> Unit = {},
 ) {
     when (page) {
         SettingsPage.API -> ApiPage(s, onChange, onToast)
@@ -112,8 +112,8 @@ internal fun SettingsSubPage(
             onNavigate = onNavigate,
             onDialog = onDialog,
             onToast = onToast,
-            sessionsJson = sessionsJson,
-            onImportSessions = onImportSessions,
+            onExportUri = onExportUri,
+            onImportUri = onImportUri,
         )
         SettingsPage.FONT -> FontSizePage(s, onChange)
         SettingsPage.PERSONAL -> PersonalizationPage(s, onChange)
@@ -593,40 +593,31 @@ private fun DataPage(
     onNavigate: (String) -> Unit,
     onDialog: (String) -> Unit,
     onToast: (String) -> Unit,
-    sessionsJson: () -> String,
-    onImportSessions: (String) -> Int,
+    onExportUri: (android.net.Uri) -> Unit,
+    onImportUri: (android.net.Uri) -> Unit,
 ) {
     val ds = LocalDsColors.current
-    val ctx = LocalContext.current
+    // 「导入聊天记录教程」弹窗（数据管理页这一行打开，和开屏页共用同一个 ImportGuideDialog）
+    var showImportGuide by remember { mutableStateOf(false) }
+    // 点「导入聊天记录」先弹提示：本机数据清除/卸载就会丢，且导入是覆盖+追加的合并
+    var showImportConfirm by remember { mutableStateOf(false) }
 
-    // 导出聊天记录：SAF CreateDocument，默认文件名 dsclone-chats.json，
-    // 写进去的就是 sessions.json 的文本（DsApp 提供当前内存里的完整会话列表）。
+    // 导出聊天记录：SAF CreateDocument，默认文件名 dsclone-chats.json。
+    // 真正的写文件在 DsApp 里（流式写 + 进度框），这里只把 Uri 交上去 —— 会话多的时候
+    // 一次导出几十 MB，不能在导出回调里同步拼字符串/写盘。
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
-        if (uri != null) {
-            val ok = runCatching {
-                val json = sessionsJson()
-                val out = ctx.contentResolver.openOutputStream(uri)
-                    ?: error("openOutputStream 返回 null")
-                out.use { it.write(json.toByteArray(Charsets.UTF_8)) }
-            }.isSuccess
-            Toast.makeText(ctx, if (ok) "已导出" else "导出失败", Toast.LENGTH_SHORT).show()
-        }
+        if (uri != null) onExportUri(uri)
     }
 
-    // 导入聊天记录：SAF OpenDocument 选 json → 读成字符串 → 交给 DsApp
-    // （DsApp 里用 Store.parseSessions 同一套解析逻辑，按 session.id 去重合并后持久化）
+    // 导入聊天记录：SAF OpenDocument。
+    // 同时接受本 App 导出的 .json 和官方 App 导出的 .zip（DsApp 按文件头判断），
+    // 所以 MIME 里要带 zip / octet-stream，最后再兜一个 */*（有些文件管理器把 .zip 报成未知类型）。
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri != null) {
-            val json = runCatching {
-                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-            }.getOrNull()
-            val n = if (json.isNullOrBlank()) 0 else runCatching { onImportSessions(json) }.getOrDefault(0)
-            Toast.makeText(ctx, if (n > 0) "已导入 $n 个会话" else "导入失败", Toast.LENGTH_SHORT).show()
-        }
+        if (uri != null) onImportUri(uri)
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -634,6 +625,15 @@ private fun DataPage(
             SettingSwitchRow("数据用于优化体验", s.trainOnData, { onChange(s.copy(trainOnData = it)) })
         }
         DsSupporting("允许我们将你的对话内容用于优化 DeepSeek 的使用体验。我们保障你的数据隐私安全。")
+
+        DsCard(topGap = 26.5.dp) {
+            SettingSwitchRow(
+                "启动时预加载全部历史",
+                s.preloadHistory,
+                { onChange(s.copy(preloadHistory = it)) },
+            )
+        }
+        DsSupporting("关闭（推荐）：启动只读会话索引、秒进 App，打开哪个对话才读哪段内容。开启：启动时把全部消息读进内存，全局搜索最快，但历史很大时要等几秒。改完下次启动生效。")
 
         DsCard(topGap = 26.5.dp) {
             SettingRow("我共享的链接", chevron = true, onClick = { onNavigate(SettingsPage.DOC_SHARE) })
@@ -651,10 +651,16 @@ private fun DataPage(
             SettingRow(
                 label = "导入聊天记录",
                 chevron = true,
-                onClick = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                onClick = { showImportConfirm = true },
+            )
+            // 导入教程：从本 App 旧设备迁移 / 从官方 App 搬
+            SettingRow(
+                label = "导入教程（从官方 App 搬）",
+                chevron = true,
+                onClick = { showImportGuide = true },
             )
         }
-        DsSupporting("导出的文件就是本机的 sessions.json；导入时同一 id 的会话会被覆盖，其余会话追加到列表最前面。")
+        DsSupporting("导入支持两种文件：本 App 导出的 dsclone-chats.json，以及官方 App「导出所有历史对话」下载的 .zip（自动拆成会话，只导入当前分支）。同一 id 的会话会被覆盖，其余追加到列表最前面。")
         DsCard(topGap = 26.5.dp) {
             SettingRow(
                 label = "删除所有历史对话",
@@ -664,6 +670,71 @@ private fun DataPage(
             )
         }
         Spacer(Modifier.height(32.dp))
+    }
+
+    if (showImportGuide) ImportGuideDialog(onDismiss = { showImportGuide = false })
+
+    // 导入前的提示框：明确「本机数据会因清除/卸载而消失」+「导入是覆盖/追加的合并」
+    if (showImportConfirm) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showImportConfirm = false }) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(ds.cardBg)
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+            ) {
+                Text("导入聊天记录", fontSize = 18.sp, color = ds.bodyText)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "聊天记录只保存在本机：清除应用数据、卸载 App 会让对话全部消失，建议定期「导出聊天记录」备份。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = ds.secondary,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "导入会与现有记录合并：同一 id 的会话被文件里的版本覆盖，其余会话追加到列表最前面。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = ds.secondary,
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(
+                        "取消",
+                        fontSize = 16.sp,
+                        color = ds.secondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { showImportConfirm = false }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "选择文件",
+                        fontSize = 16.sp,
+                        color = DsBlue,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                showImportConfirm = false
+                                importLauncher.launch(
+                                    arrayOf(
+                                        "application/zip",
+                                        "application/x-zip-compressed",
+                                        "application/octet-stream",
+                                        "application/json",
+                                        "text/plain",
+                                        "*/*",
+                                    )
+                                )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
     }
 }
 

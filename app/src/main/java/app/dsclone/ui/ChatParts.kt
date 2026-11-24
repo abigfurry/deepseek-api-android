@@ -253,6 +253,7 @@ fun MessageList(
     onSwitchVariant: (Msg, Int) -> Unit,
     onDeleteFrom: (Msg) -> Unit,
     onShowContext: () -> Unit,
+    onContinue: (Msg) -> Unit,
     state: LazyListState = rememberLazyListState(),
     stream: StreamUi = remember { StreamUi() },
     scrollToMessageId: Long = -1L,
@@ -306,33 +307,51 @@ fun MessageList(
 
     // 官方是「会话级唯一选中」：同一时刻只有一条消息处于选择态
     var selectingId by remember { mutableStateOf<Long?>(null) }
+    // 选中文本后要能退出（以前只能杀 App）：
+    //  - 返回键退出
+    //  - 点击消息之外的空白处也退出（官方就是这样；之前点空白没反应，选择态一直挂着，
+    //    后面的长按全被当成「继续选字」，长按菜单再也出不来）
+    androidx.activity.compose.BackHandler(enabled = selectingId != null) { selectingId = null }
 
-    LazyColumn(
-        state = state,
-        modifier = Modifier.fillMaxSize(),
-        // 窄屏：官方第一条消息气泡顶 = 82.5（顶栏底 64.5 之后 20）
-        contentPadding = PaddingValues(top = if (DsLayout.narrow) 20.dp else 12.dp, bottom = 8.dp),
-    ) {
-        items(messages, key = { it.id }) { m ->
-            // 正在流式的那一条：把 StreamUi 里的实时文本叠加进来。
-            // 这一步只在「本 item 的组合作用域」里读 stream.live —— 每 33ms 一次，
-            // 只会重组这一行，侧栏/顶栏/输入卡/其它消息都不动。
-            val live = stream.live
-            val shown = if (live != null && live.id == m.id) live else m
-            MessageRow(
-                m = shown,
-                isLast = m.id == last?.id,
-                onCopy = onCopy,
-                onEdit = onEdit,
-                onRegenerateFrom = onRegenerateFrom,
-                onSwitchVariant = onSwitchVariant,
-                onDeleteFrom = onDeleteFrom,
-                onShowContext = onShowContext,
-                selecting = selectingId == m.id,
-                anySelecting = selectingId != null,
-                onStartSelect = { selectingId = m.id },
-                onStopSelect = { selectingId = null },
+    Box(
+        Modifier
+            .fillMaxSize()
+            .then(
+                if (selectingId != null) {
+                    Modifier.pointerInput(selectingId) {
+                        detectTapGestures(onTap = { selectingId = null })
+                    }
+                } else Modifier
             )
+    ) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxSize(),
+            // 窄屏：官方第一条消息气泡顶 = 82.5（顶栏底 64.5 之后 20）
+            contentPadding = PaddingValues(top = if (DsLayout.narrow) 20.dp else 12.dp, bottom = 8.dp),
+        ) {
+            items(messages, key = { it.id }) { m ->
+                // 正在流式的那一条：把 StreamUi 里的实时文本叠加进来。
+                // 这一步只在「本 item 的组合作用域」里读 stream.live —— 每 33ms 一次，
+                // 只会重组这一行，侧栏/顶栏/输入卡/其它消息都不动。
+                val live = stream.live
+                val shown = if (live != null && live.id == m.id) live else m
+                MessageRow(
+                    m = shown,
+                    isLast = m.id == last?.id,
+                    onCopy = onCopy,
+                    onEdit = onEdit,
+                    onRegenerateFrom = onRegenerateFrom,
+                    onSwitchVariant = onSwitchVariant,
+                    onDeleteFrom = onDeleteFrom,
+                    onShowContext = onShowContext,
+                    onContinue = onContinue,
+                    selecting = selectingId == m.id,
+                    anySelecting = selectingId != null,
+                    onStartSelect = { selectingId = m.id },
+                    onStopSelect = { selectingId = null },
+                )
+            }
         }
     }
 }
@@ -348,6 +367,7 @@ private fun MessageRow(
     onSwitchVariant: (Msg, Int) -> Unit,
     onDeleteFrom: (Msg) -> Unit,
     onShowContext: () -> Unit,
+    onContinue: (Msg) -> Unit = {},
     selecting: Boolean = false,
     anySelecting: Boolean = false,
     onStartSelect: () -> Unit = {},
@@ -387,6 +407,9 @@ private fun MessageRow(
                         // 官方：选中状态下点空白（也就是别的消息）直接消失
                         onTap = { if (anySelecting && !selecting) onStopSelect() },
                         onLongPress = { off ->
+                            // 有选中态时：先退出选择，但**同一次长按仍然弹菜单** ——
+                            // 以前这里直接 return，用户看到的就是「没选中了怎么长按还是没菜单」。
+                            if (anySelecting) onStopSelect()
                             // MsgMenu 的 Popup 是 message-relative（没有 alignment），
                             // 所以这里只能给手势的相对坐标；origin 是本条消息在窗口里的位置
                             // （长按这一刻取一次，菜单/选字定位只用这一次的值）
@@ -479,16 +502,64 @@ private fun MessageRow(
                     )
                 }
                 if (m.text.isNotBlank()) {
-                    MarkdownView(m.text, selectionMode = selecting, selectAtY = origin.y + anchor.y)
+                    MarkdownView(
+                        m.text,
+                        selectionMode = selecting,
+                        selectAtY = origin.y + anchor.y,
+                        streaming = m.streaming,
+                    )
                     Spacer(Modifier.height(2.dp))
                 }
                     if (m.error) {
-                    Text(
-                        text = "请求失败，请检查 API Key / 网络 / 模型名",
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                    // 失败时给一个显眼的「重新生成」，不必去长按菜单里找
+                    Row(
+                        Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (m.text.isBlank()) "请求失败，请检查 API Key / 网络 / 模型名" else "生成失败",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "重新生成 ›",
+                            color = com.yuyuyu.deepseek.ui.theme.DsBlue,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onRegenerateFrom(m) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+
+                // 用户点「停止生成」中断的回答：官方是正文末尾右侧一个「继续生成」小药丸
+                // （白底圆角、文字按钮，压在操作行上方，不单独占整行）
+                if (m.stopped && !m.streaming && isLast) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp, bottom = 2.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Box(
+                            Modifier
+                                .height(28.dp)
+                                .shadow(1.dp, RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(ds.cardBg)
+                                .clickable { onContinue(m) }
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "继续生成",
+                                fontSize = 13.sp,
+                                color = ds.bodyText,
+                            )
+                        }
+                    }
                 }
 
                 if (m.citations.isNotEmpty()) {
@@ -1149,7 +1220,7 @@ private fun MsgMenu(
                     MenuItem(R.drawable.ic_copy_outline, I18n.t("复制", "Copy"), onCopy)
                     if (role == "user") MenuItem(R.drawable.ic_edit_outline_20, I18n.t("修改", "Edit"), onEdit)
                     MenuItem(R.drawable.ic_share_outline_20, I18n.t("分享", "Share"), onShare)
-                    MenuItem(R.drawable.ic_text_select, I18n.t("选择文本", "Select text"), onSelectText)
+                    MenuItem(R.drawable.ic_select_text_official_20, I18n.t("选择文本", "Select text"), onSelectText)
                     if (role != "user") MenuItem(R.drawable.ic_refresh_outline_20, I18n.t("重新生成", "Regenerate"), onRegenerate)
                     MenuItem(R.drawable.ic_trash_outline_20, I18n.t("删除", "Delete"), onDelete, danger = true)
                 }
@@ -1296,7 +1367,9 @@ fun shareText(ctx: android.content.Context, text: String) {
 private fun MaybeSelect(enabled: Boolean, content: @Composable () -> Unit) {
     val state = androidx.compose.foundation.text.selection.rememberSelectionState()
     if (enabled) {
-        androidx.compose.foundation.text.selection.SelectionContainer(state = state) { content() }
+        DsSelectionColors {
+            androidx.compose.foundation.text.selection.SelectionContainer(state = state) { content() }
+        }
     } else content()
 }
 

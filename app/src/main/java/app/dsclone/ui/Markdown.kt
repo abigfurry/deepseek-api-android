@@ -24,7 +24,9 @@ import androidx.compose.foundation.text.selection.SelectionState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInWindow
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -429,7 +432,12 @@ fun latexLite(input: String): String {
 }
 
 
-fun inlineMarkdown(srcRaw: String, codeBg: Color, link: Color = DsBlue): AnnotatedString {
+fun inlineMarkdown(
+    srcRaw: String,
+    codeBg: Color,
+    link: Color = DsBlue,
+    codeFg: Color = Color.Unspecified,
+): AnnotatedString {
     val src = latexLite(srcRaw)
     val b = AnnotatedString.Builder()
     var i = 0
@@ -479,15 +487,15 @@ fun inlineMarkdown(srcRaw: String, codeBg: Color, link: Color = DsBlue): Annotat
                 }
             }
 
-            // 行内代码：等宽 + 官方 codeBg 底色（浅 #F7F7F7 / 深 #1B1B1C）
+            // 行内代码：官方是**等宽字体 + 次级灰字色**（实测 #7D7F85，正文是 #191B23），没有底色
             rest.startsWith("`") -> {
                 val end = src.indexOf('`', i + 1)
                 if (end > i + 1) {
                     b.withStyle(
                         SpanStyle(
                             fontFamily = FontFamily.Monospace,
-                            background = codeBg,
                             fontSize = MD_INLINE_CODE_SIZE,
+                            color = codeFg,
                         )
                     ) {
                         b.append(src.substring(i + 1, end))
@@ -545,25 +553,42 @@ fun MarkdownView(
     compact: Boolean = false,
     selectionMode: Boolean = false,
     selectAtY: Float = -1f,
+    streaming: Boolean = false,
 ) {
     val fg = if (textColor == androidx.compose.ui.graphics.Color.Unspecified)
         MaterialTheme.colorScheme.onBackground else textColor
     val blocks = remember(source) { parseMarkdown(source) }
 
-    // 整条消息只用**一个** SelectionState / SelectionContainer：
-    // 之前是每个 Markdown 块各自一个容器，导致「只能在某一段里选，跨不了段、也选不了全文」
-    // （用户反馈：只能选那一段，不能把整段文字都框选到）。
-    // 合成一个容器后，拖动选择柄可以跨段落连续选中整条消息。
-    val selState = remember(blocks) { SelectionState() }
+    // 选择文本：
+    //  - 官方点「选择文本」会先把**长按位置所在的那一段**快捷选中（段落 / 标题 / 单个列表项），
+    //    然后用户再拖两端手柄调整。以前我们直接 selectAll 整条消息，和官方不一致。
+    //  - Compose 的 SelectionState 只有 selectAll()/clear()/extendSelectionByWord()，
+    //    没有「按区间选中」的公开 API，所以这里按「可选单元」拆成多个 SelectionContainer：
+    //    段落 / 标题 / 列表项 / 代码块各自一个容器，按下位置所在的单元进入时自动 selectAll。
+    //    代价是跨单元框选只能在单个单元内进行（旧实现整条消息一个容器）。
+    val unitCount = remember(blocks) {
+        var n = 0
+        for (b in blocks) {
+            n += when (b) {
+                is MdBlock.Bullet -> b.items.size
+                is MdBlock.Num -> b.items.size
+                else -> 1
+            }
+        }
+        n
+    }
+    val blockStates = remember(blocks) { List(unitCount) { SelectionState() } }
+    var pressedBlock by remember(blocks) { mutableStateOf(-1) }
 
-    LaunchedEffect(selectionMode, blocks) {
+    LaunchedEffect(selectionMode, pressedBlock, blocks) {
         if (!selectionMode) {
-            runCatching { selState.clear() }
+            pressedBlock = -1
             return@LaunchedEffect
         }
-        // 进入「选择文本」时默认全选这条消息，用户可以直接复制 / 再拖动手柄微调
-        kotlinx.coroutines.delay(80)
-        runCatching { selState.selectAll() }
+        if (pressedBlock !in blockStates.indices) return@LaunchedEffect
+        // 等布局稳定后再选，否则 SelectionContainer 还没注册完，选不中
+        kotlinx.coroutines.delay(60)
+        runCatching { blockStates[pressedBlock].selectAll() }
     }
 
     val content: @Composable () -> Unit = {
@@ -572,45 +597,157 @@ fun MarkdownView(
             // 官方段落间距 ≈19dp（实测），思考区按 12dp
             verticalArrangement = Arrangement.spacedBy(if (compact) MD_COMPACT_GAP else MD_PARA_GAP)
         ) {
+            var unit = 0
             for (block in blocks) {
-                Box(Modifier.fillMaxWidth()) {
-                    MarkdownBlock(block, fg, compact)
+                when (block) {
+                    is MdBlock.Bullet -> {
+                        for (i in block.items.indices) {
+                            val lvl = block.levels.getOrElse(i) { 0 }.coerceIn(0, 3)
+                            val item = block.items[i]
+                            val idx = unit++
+                            SelectableUnit(
+                                index = idx,
+                                states = blockStates,
+                                selectionMode = selectionMode,
+                                pressedIndex = pressedBlock,
+                                selectAtY = selectAtY,
+                                onPressAt = { pressedBlock = idx },
+                            ) {
+                                ListItemRow(bulletMarker(lvl), lvl, item, fg, compact, Alignment.TopStart)
+                            }
+                        }
+                    }
+                    is MdBlock.Num -> {
+                        for (i in block.items.indices) {
+                            val lvl = block.levels.getOrElse(i) { 0 }.coerceIn(0, 3)
+                            val item = block.items[i]
+                            val idx = unit++
+                            SelectableUnit(
+                                index = idx,
+                                states = blockStates,
+                                selectionMode = selectionMode,
+                                pressedIndex = pressedBlock,
+                                selectAtY = selectAtY,
+                                onPressAt = { pressedBlock = idx },
+                            ) {
+                                ListItemRow("${i + 1}.", lvl, item, fg, compact, Alignment.TopEnd)
+                            }
+                        }
+                    }
+                    else -> {
+                        val idx = unit++
+                        SelectableUnit(
+                            index = idx,
+                            states = blockStates,
+                            selectionMode = selectionMode,
+                            pressedIndex = pressedBlock,
+                            selectAtY = selectAtY,
+                            onPressAt = { pressedBlock = idx },
+                        ) {
+                            MarkdownBlock(block, fg, compact, streaming)
+                        }
+                    }
                 }
             }
         }
     }
 
-    if (selectionMode) {
-        androidx.compose.foundation.text.selection.SelectionContainer(state = selState) {
-            content()
+    content()
+}
+
+/**
+ * 一个「可选单元」的包装：普通模式直接渲染；选择模式下套一个独立的 SelectionContainer，
+ * 并用 onGloballyPositioned 记录它是否包含长按位置（用于进入选择时自动选中这一段）。
+ */
+@Composable
+private fun SelectableUnit(
+    index: Int,
+    states: List<androidx.compose.foundation.text.selection.SelectionState>,
+    selectionMode: Boolean,
+    pressedIndex: Int,
+    selectAtY: Float,
+    onPressAt: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val body: @Composable () -> Unit = {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { c ->
+                    if (selectAtY > 0f && pressedIndex != index) {
+                        val r = c.boundsInWindow()
+                        if (selectAtY >= r.top && selectAtY <= r.bottom) onPressAt()
+                    }
+                }
+        ) { content() }
+    }
+    if (selectionMode && index in states.indices) {
+        DsSelectionColors {
+            androidx.compose.foundation.text.selection.SelectionContainer(state = states[index]) { body() }
         }
     } else {
-        content()
+        body()
     }
 }
 
+/**
+ * 选中文字的高亮色 —— 按官方 App 2.9.0 实机截图取色：
+ *  - 选中底色 #DEEAFF（浅蓝，不是灰色）
+ *  - 拖选两端的手柄 #6799FE
+ * 深色模式官方没取到，用同色系压暗的 #31456B。
+ */
 @Composable
-private fun MarkdownBlock(block: MdBlock, fg: androidx.compose.ui.graphics.Color, compact: Boolean) {
+internal fun DsSelectionColors(content: @Composable () -> Unit) {
+    val ds = LocalDsColors.current
+    val dark = ds.pageBg.luminance() < 0.5f
+    val colors = androidx.compose.foundation.text.selection.TextSelectionColors(
+        handleColor = androidx.compose.ui.graphics.Color(0xFF6799FE),
+        backgroundColor = androidx.compose.ui.graphics.Color(if (dark) 0xFF31456B else 0xFFDEEAFF),
+    )
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.foundation.text.selection.LocalTextSelectionColors provides colors,
+    ) { content() }
+}
+
+@Composable
+private fun MarkdownBlock(
+    block: MdBlock,
+    fg: androidx.compose.ui.graphics.Color,
+    compact: Boolean,
+    streaming: Boolean,
+) {
     val ds = LocalDsColors.current
     when (block) {
 
                 // 正文 17sp/26sp（思考区 15sp/24sp），字色官方 #191B23 / #E1E2EC
                 is MdBlock.Para -> Text(
-                    text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
+                    text = remember(block.text, ds.codeBg, ds.thoughtText) { inlineMarkdown(block.text, ds.codeBg, codeFg = ds.thoughtText) },
                     style = mdBodyStyle(compact),
                     color = fg,
                 )
 
                 // 标题 h1 26/39 … h6 13/18，SemiBold，同正文色
                 is MdBlock.Head -> Text(
-                    text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
+                    text = remember(block.text, ds.codeBg, ds.thoughtText) { inlineMarkdown(block.text, ds.codeBg, codeFg = ds.thoughtText) },
                     style = mdHeadStyle(block.level, compact),
                     color = fg,
                 )
 
                 is MdBlock.Code -> CodeBlock(block.lang, block.code)
 
-                is MdBlock.Math -> MathText(block.tex)
+                // 公式：流式过程中先显示原文（每 33ms 重排一次 JLaTeXMath 会抢主线程），
+                // 消息结束后再真正排版（用户反馈：官方是秒渲染，旧 KaTeX WebView 要卡几秒）
+                is MdBlock.Math -> if (streaming) {
+                    Text(
+                        text = block.tex,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                        color = ds.thoughtText,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                } else {
+                    MathText(block.tex)
+                }
 
                 is MdBlock.Table -> GfmTable(block.header, block.rows)
 
@@ -657,7 +794,7 @@ private fun MarkdownBlock(block: MdBlock, fg: androidx.compose.ui.graphics.Color
                             .background(mdDividerColor(ds), RoundedCornerShape(2.dp))
                     )
                     Text(
-                        text = remember(block.text, ds.codeBg) { inlineMarkdown(block.text, ds.codeBg) },
+                        text = remember(block.text, ds.codeBg, ds.thoughtText) { inlineMarkdown(block.text, ds.codeBg, codeFg = ds.thoughtText) },
                         style = mdBodyStyle(compact),
                         color = ds.thoughtText,
                         modifier = Modifier.padding(start = MD_QUOTE_PAD),
@@ -701,7 +838,7 @@ private fun ListItemRow(
             )
         }
         Text(
-            text = remember(item, ds.codeBg) { inlineMarkdown(item, ds.codeBg) },
+            text = remember(item, ds.codeBg, ds.thoughtText) { inlineMarkdown(item, ds.codeBg, codeFg = ds.thoughtText) },
             style = mdBodyStyle(compact),
             color = fg,
             modifier = Modifier.padding(start = 0.dp),

@@ -92,6 +92,8 @@ fun DrawerContent(
     sessions: List<Session>,
     currentId: String?,
     settings: Settings,
+    /** 懒加载模式下：全部历史消息是否已经载入内存（没载入时先不做全文搜索，避免漏结果） */
+    historyReady: Boolean = true,
     onSelect: (String) -> Unit,
     onNewChat: () -> Unit,
     onDelete: (Session) -> Unit,
@@ -145,7 +147,7 @@ fun DrawerContent(
                 runCatching { kotlinx.coroutines.delay(60); searchFocus.requestFocus() }
             }
         }
-        val results = rememberFullTextSearch(sessions, query.text)
+        val results = rememberFullTextSearch(sessions, query.text, historyReady)
 
         if (selecting) {
             BatchSelectionHeader(
@@ -238,19 +240,34 @@ fun DrawerContent(
             cal.set(java.util.Calendar.MILLISECOND, 0)
             val today = cal.timeInMillis
             val day = 24L * 60 * 60 * 1000
-            val pinnedList = sessions.filter { it.pinned }
-            val rest = sessions.filter { !it.pinned }
+            val labelToday = I18n.t("今天", "Today")
+            val labelYesterday = I18n.t("昨天", "Yesterday")
+            val labelWeek = I18n.t("7 天内", "Last 7 days")
+            val labelMonth = I18n.t("30 天内", "Last 30 days")
+            val labelEarlier = I18n.t("更早", "Earlier")
+            // 置顶 / 普通会话都按更新时间从新到旧；分组顺序固定「今天 → 昨天 → 7 天内 → 30 天内 → 更早」。
+            // 之前用的是 sessions 的原始顺序 + groupBy：导入历史（或任何不是按时间排的列表）会把
+            // 「更早」排到最上面，用户看到的顺序就乱了。
+            val pinnedList = sessions.filter { it.pinned }.sortedByDescending { it.updatedAt }
+            val rest = sessions.filter { !it.pinned }.sortedByDescending { it.updatedAt }
+            val buckets = LinkedHashMap<String, MutableList<Session>>()
+            for (label in listOf(labelToday, labelYesterday, labelWeek, labelMonth, labelEarlier)) {
+                buckets[label] = ArrayList()
+            }
+            for (s in rest) {
+                val label = when {
+                    // session_history_timeline_label_today / _yesterday：今天 / Today、昨天 / Yesterday
+                    s.updatedAt >= today -> labelToday
+                    s.updatedAt >= today - day -> labelYesterday
+                    s.updatedAt >= today - 7 * day -> labelWeek
+                    s.updatedAt >= today - 30 * day -> labelMonth
+                    else -> labelEarlier
+                }
+                buckets.getValue(label).add(s)
+            }
             buildList {
                 if (pinnedList.isNotEmpty()) add(I18n.t("置顶", "Pinned") to pinnedList)
-                addAll(rest.groupBy { s ->
-                when {
-                    // session_history_timeline_label_today / _yesterday：今天 / Today、昨天 / Yesterday
-                    s.updatedAt >= today -> I18n.t("今天", "Today")
-                    s.updatedAt >= today - day -> I18n.t("昨天", "Yesterday")
-                    s.updatedAt >= today - 7 * day -> I18n.t("7 天内", "Last 7 days")
-                    else -> I18n.t("更早", "Earlier")
-                }
-            }.toList())
+                for ((label, list) in buckets) if (list.isNotEmpty()) add(label to list)
             }
         }
 
@@ -260,6 +277,15 @@ fun DrawerContent(
                     item {
                         Text(
                             text = "搜索对话内容",
+                            fontSize = 14.sp,
+                            color = ds.thoughtText,
+                            modifier = Modifier.padding(start = 21.00.dp, top = 12.dp),
+                        )
+                    }
+                } else if (!historyReady) {
+                    item {
+                        Text(
+                            text = I18n.t("正在加载历史记录…", "Loading chat history…"),
                             fontSize = 14.sp,
                             color = ds.thoughtText,
                             modifier = Modifier.padding(start = 21.00.dp, top = 12.dp),
@@ -704,19 +730,27 @@ data class FullTextSearchHit(
 )
 
 @Composable
-private fun rememberFullTextSearch(sessions: List<Session>, query: String): List<FullTextSearchHit> {
+private fun rememberFullTextSearch(
+    sessions: List<Session>,
+    query: String,
+    ready: Boolean = true,
+): List<FullTextSearchHit> {
     var results by remember { mutableStateOf(emptyList<FullTextSearchHit>()) }
-    LaunchedEffect(query, sessions) {
+    LaunchedEffect(query, sessions, ready) {
         if (query.isBlank()) { results = emptyList(); return@LaunchedEffect }
+        // 懒加载模式：消息还没全部读进内存时先不搜，避免「明明有却搜不到」
+        if (!ready) { results = emptyList(); return@LaunchedEffect }
         delay(250)
         results = withContext(Dispatchers.Default) {
-            val q = query.lowercase()
+            val q = query.trim()
             val out = ArrayList<FullTextSearchHit>()
             for (s in sessions) {
                 for (m in s.messages) {
                     val text = m.text
                     if (text.isEmpty()) continue
-                    val idx = text.lowercase().indexOf(q)
+                    // 不用 text.lowercase()：导入官方包后全部正文有几千万字，每次按键都复制一遍
+                    // 会让堆瞬间多出上百 MB（OOM / 卡死）。indexOf(ignoreCase) 不分配整串副本。
+                    val idx = text.indexOf(q, ignoreCase = true)
                     if (idx >= 0) {
                         out.add(FullTextSearchHit(s, m.id, m.role, text, idx, idx + q.length))
                     }

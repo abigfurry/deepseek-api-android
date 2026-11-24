@@ -88,6 +88,8 @@ fun ApiKeySetupScreen(
     val applyUrl = remember(providerId) { providerKeyUrl(preset) }
     // 「API 使用教程」弹窗（首次使用的人不知道去哪拿 Key / 怎么充值）
     var showApiGuide by remember { mutableStateOf(false) }
+    // 「导入聊天记录教程」弹窗（从本 App 旧设备迁移 / 从官方 App 搬）
+    var showImportGuide by remember { mutableStateOf(false) }
 
 
     // 模型候选：手填置顶 → 本次拉取结果 → 上次拉取缓存 → 预设兜底（与 data/Providers.kt 的顺序一致）
@@ -205,9 +207,20 @@ fun ApiKeySetupScreen(
                     .clickable { showApiGuide = true }
                     .padding(vertical = 5.dp, horizontal = 2.dp),
             )
+            // 导入聊天记录教程：本 App 旧设备怎么迁 / 官方 App 有导出但格式不通用（同一个弹窗）
+            Text(
+                text = "导入聊天记录教程（从官方 App 搬过来）›",
+                fontSize = 13.sp,
+                color = DsBlue,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { showImportGuide = true }
+                    .padding(vertical = 5.dp, horizontal = 2.dp),
+            )
         }
 
         if (showApiGuide) ApiGuideDialog(onDismiss = { showApiGuide = false })
+        if (showImportGuide) ImportGuideDialog(onDismiss = { showImportGuide = false })
 
         Spacer(Modifier.height(14.dp))
 
