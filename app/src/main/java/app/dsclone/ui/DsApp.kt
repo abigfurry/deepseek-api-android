@@ -102,7 +102,14 @@ fun DsApp() {
     // 但**真机实测这台 800dp 平板官方就是两栏常驻**（抽屉 305dp + 内容），所以静态那个
     // 840 与实测冲突，以实测为准：800dp 必须两栏，用 768 作断点（官方在 768~839 之间的
     // 具体行为没有可测设备验证，先保持 768 不动，避免把平板布局改坏）。
-    val isWideScreen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 768
+    // 窄屏/宽屏这一档布局参数（DsMetric.msgPadX / actionPadStart / topBarH …）全依赖 DsLayout.narrow，
+    // 但此前**从来没有人调用过 DsLayout.update()** → narrow 恒为 false，
+    // 于是 640dp 手机上一直在用平板那套值：正文 62.5dp、操作行外扩 13dp
+    // → 操作行整体比正文右/左偏出约 25dp（用户说的"偏了 0.5cm"就是这个）。
+    // 这里每次组合都同步一次（读 LocalConfiguration 也会在窗口尺寸变化时触发重组）。
+    val winCfg = androidx.compose.ui.platform.LocalConfiguration.current
+    com.yuyuyu.deepseek.ui.theme.DsLayout.update(winCfg.screenWidthDp)
+    val isWideScreen = winCfg.screenWidthDp >= 768
     var drawerOpen by remember { mutableStateOf(isWideScreen) }
     val launchPhone = remember {
         ((ctx as? android.app.Activity)?.intent?.getBooleanExtra("phone", false)) ?: false
