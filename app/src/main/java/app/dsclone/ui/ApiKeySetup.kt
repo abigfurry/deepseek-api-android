@@ -86,6 +86,9 @@ fun ApiKeySetupScreen(
         ?: if (providerId == initialPid) initial.model
         else preset.fallbackModels.firstOrNull() ?: initial.model
     val applyUrl = remember(providerId) { providerKeyUrl(preset) }
+    // 「API 使用教程」弹窗（首次使用的人不知道去哪拿 Key / 怎么充值）
+    var showApiGuide by remember { mutableStateOf(false) }
+
 
     // 模型候选：手填置顶 → 本次拉取结果 → 上次拉取缓存 → 预设兜底（与 data/Providers.kt 的顺序一致）
     fun candidateModels(pid: String): List<String> {
@@ -192,7 +195,19 @@ fun ApiKeySetupScreen(
                     .clickable { openUrl(ctx, applyUrl) }
                     .padding(vertical = 5.dp, horizontal = 2.dp),
             )
+            // API 使用教程：怎么拿 Key、怎么充值、常见报错（应用内弹窗，不跳浏览器）
+            Text(
+                text = "API 使用教程（拿 Key · 充值 · 报错）›",
+                fontSize = 13.sp,
+                color = DsBlue,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { showApiGuide = true }
+                    .padding(vertical = 5.dp, horizontal = 2.dp),
+            )
         }
+
+        if (showApiGuide) ApiGuideDialog(onDismiss = { showApiGuide = false })
 
         Spacer(Modifier.height(14.dp))
 

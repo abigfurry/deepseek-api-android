@@ -17,6 +17,8 @@ class MainActivity : ComponentActivity() {
         // 必须在 super.onCreate 之前决定主题：窗口底色/启动画面第一帧由主题决定。
         // 之前窗口底色永远用 values/themes.xml 里的白色 → 深色模式下进 App 会「先白后黑」。
         val startupSettings = runCatching { Store.loadSettings(this) }.getOrNull()
+        // 多语言：语言状态也必须在第一次组合前就位（否则首帧先中文再闪成英文）
+        com.yuyuyu.deepseek.ui.I18n.init(startupSettings?.appLanguage ?: "system")
         val savedAppearance = startupSettings?.appearance ?: "system"
         val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES

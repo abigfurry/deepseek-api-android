@@ -513,7 +513,8 @@ fun InputBar(
                             decorationBox = { inner ->
                                 if (value.isEmpty()) {
                                     Text(
-                                        text = "发消息或按住说话",
+                                        // chat_input_placeholder_voice：发消息或按住说话 / Type a message or hold to speak
+                                        text = I18n.t("发消息或按住说话", "Type a message or hold to speak"),
                                         color = ds.placeholder,
                                         // 官方占位符实测：墨迹 247×31px、色 #B9BABB（深色 #7D7F85）
                                         fontSize = 16.sp,
@@ -616,12 +617,14 @@ fun InputBar(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Chip(
-                        R.drawable.ic_think_outline_16, "深度思考", thinking, onToggleThinking, 94.dp,
+                        // message_r1_button：深度思考 / Think
+                        R.drawable.ic_think_outline_16, I18n.t("深度思考", "Think"), thinking, onToggleThinking, 94.dp,
                         lottieRes = R.raw.think, lottieOnRes = R.raw.think_on,
                     )
                     Spacer(Modifier.width(7.5.dp))
                     Chip(
-                        R.drawable.ic_search_web, "智能搜索", search, onToggleSearch, 94.dp,
+                        // message_search_button：智能搜索 / Search
+                        R.drawable.ic_search_web, I18n.t("智能搜索", "Search"), search, onToggleSearch, 94.dp,
                         lottieRes = R.raw.globe, lottieOnRes = R.raw.globe_on,
                     )
                     Spacer(Modifier.weight(1f))
@@ -763,7 +766,8 @@ fun InputBar(
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Text(
-                    text = "回答由 AI 生成，仅供参考",
+                    // 官方英文：AI-generated, for reference only
+                    text = I18n.t("回答由 AI 生成，仅供参考", "AI-generated, for reference only"),
                     modifier = Modifier.fillMaxWidth(),
                     // 官方墨迹 248×23px：本机 12sp 时 CJK 推进 24px、字距 −0.8sp(−1.6px) → 22.4px，
                     // 整串墨迹 ≈248px ✓；行高 12sp 让墨迹顶正好落在容器顶（2093px）。

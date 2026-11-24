@@ -59,17 +59,20 @@ const val WELCOME_FALLBACK_TEXT: String = "今天有什么可以帮到你？"
  * 文案由服务端 uiWelcomeMessage 下发；这里按 6 个时段还原「文案随时间变化」的观感。
  */
 fun greetingForHour(hour: Int): String = when (hour) {
-    5, 6, 7, 8 -> "早上好，今天想聊点什么？"
-    9, 10, 11 -> "上午好，有什么可以帮到你？"
-    12, 13 -> "中午好，想聊点什么？"
-    14, 15, 16, 17 -> WELCOME_FALLBACK_TEXT
-    18, 19, 20, 21, 22 -> "晚上好，今天过得怎么样？"
-    else -> "夜深了，还没睡吗？" // 23, 0..4
+    5, 6, 7, 8 -> I18n.t("早上好，今天想聊点什么？", "Good morning! What would you like to talk about?")
+    9, 10, 11 -> I18n.t("上午好，有什么可以帮到你？", "Good morning! How can I help you?")
+    12, 13 -> I18n.t("中午好，想聊点什么？", "Good afternoon! What's on your mind?")
+    14, 15, 16, 17 -> I18n.t(WELCOME_FALLBACK_TEXT, "How can I help you?")
+    18, 19, 20, 21, 22 -> I18n.t("晚上好，今天过得怎么样？", "Good evening! How was your day?")
+    else -> I18n.t("夜深了，还没睡吗？", "It's late. Still awake?") // 23, 0..4
 }
 
-/** 当前时间对应的问候语（进入页面时取一次，避免重组时跳动）。 */
+/** 当前时间对应的问候语（进入页面时取一次，避免重组时跳动；语言变了要重取）。 */
 @Composable
-fun rememberGreetingText(): String = remember { greetingForHour(LocalTime.now().hour) }
+fun rememberGreetingText(): String {
+    val lang = I18n.lang
+    return remember(lang) { greetingForHour(LocalTime.now().hour) }
+}
 
 /**
  * 官方空会话欢迎页（鲸鱼 + 问候语）。

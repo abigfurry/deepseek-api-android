@@ -1,0 +1,796 @@
+﻿package app.dsclone.ui
+
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import app.dsclone.R
+import app.dsclone.data.Msg
+import app.dsclone.ui.theme.DsMetric
+import app.dsclone.ui.theme.DsBlue
+import app.dsclone.ui.theme.LocalDsColors
+
+/* ------------------------------------------------------------------ 顶栏 */
+
+@Composable
+fun TopBar(
+    title: String,
+    onMenu: () -> Unit,
+    onMute: () -> Unit,
+    onNewChat: () -> Unit,
+    autoRead: Boolean = false,
+) {
+    val ds = LocalDsColors.current
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(DsMetric.TOP_BAR_H.dp)
+            .padding(start = DsMetric.TOP_BAR_PAD_START.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(DsMetric.TOP_ICON_BOX.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onMenu),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_menu_outline_24),
+                contentDescription = "打开侧边栏",
+                tint = ds.bodyText,
+                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+            )
+        }
+        if (title.isNotBlank()) {
+            Text(
+                text = title,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 9.53.dp, end = 6.dp),
+                fontSize = 16.sp,
+                lineHeight = 17.90.sp,
+                fontWeight = FontWeight.Medium,
+                color = ds.bodyText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        Box(
+            Modifier
+                .size(DsMetric.TOP_ICON_BOX.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onMute),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(
+                    if (autoRead) R.drawable.ic_mute_filled_20 else R.drawable.ic_mute_audio_outline_24,
+                ),
+                contentDescription = if (autoRead) "关闭自动朗读" else "开启自动朗读",
+                tint = if (autoRead) DsBlue else ds.bodyText,
+                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+            )
+        }
+        Box(
+            Modifier
+                .size(DsMetric.TOP_ICON_BOX.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onNewChat),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_new_chat_outline_24),
+                contentDescription = "开启新对话",
+                tint = ds.bodyText,
+                modifier = Modifier.size(DsMetric.TOP_ICON.dp),
+            )
+        }
+    }
+    }
+}
+
+/* ------------------------------------------------------------ 消息列表 */
+
+@Composable
+fun MessageList(
+    messages: List<Msg>,
+    onCopy: (String) -> Unit,
+    onEdit: (Msg) -> Unit,
+    onRegenerateFrom: (Msg) -> Unit,
+    onDeleteFrom: (Msg) -> Unit,
+    onShowContext: () -> Unit,
+    state: LazyListState = rememberLazyListState(),
+) {
+    val last = messages.lastOrNull()
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) state.scrollToItem(messages.lastIndex)
+    }
+    LaunchedEffect(last?.text?.length, last?.reasoning?.length) {
+        if (messages.isNotEmpty()) {
+            val visibleLast = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (visibleLast >= messages.size - 2) state.scrollToItem(messages.lastIndex)
+        }
+    }
+
+    LazyColumn(
+        state = state,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 8.dp),
+    ) {
+        items(messages, key = { it.id }) { m ->
+            MessageRow(
+                m = m,
+                isLast = m.id == last?.id,
+                onCopy = onCopy,
+                onEdit = onEdit,
+                onRegenerateFrom = onRegenerateFrom,
+                onDeleteFrom = onDeleteFrom,
+                onShowContext = onShowContext,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MessageRow(
+    m: Msg,
+    isLast: Boolean,
+    onCopy: (String) -> Unit,
+    onEdit: (Msg) -> Unit,
+    onRegenerateFrom: (Msg) -> Unit,
+    onDeleteFrom: (Msg) -> Unit,
+    onShowContext: () -> Unit,
+) {
+    val ds = LocalDsColors.current
+    var menu by remember { mutableStateOf(false) }
+    var anchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    // 手势给的 off 是相对本条消息的坐标，必须加上消息块自身在窗口里的位置，
+    // 否则菜单只会跑到消息左上角（就是之前的「乱飞」）
+    var origin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    val density = LocalDensity.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var selecting by remember { mutableStateOf(false) }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { c -> origin = c.positionInWindow() }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { off ->
+                        // MsgMenu 的 Popup 是 message-relative（没有 alignment），
+                        // 所以这里只能给手势的相对坐标；再加 origin 就是把自己在窗口的位置算两遍
+                        anchor = off
+                        menu = true
+                    },
+                )
+            }
+    ) {
+        if (m.role == "user") {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 60.dp, end = DsMetric.BUBBLE_RIGHT.dp, bottom = 10.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Surface(
+                    color = ds.userBubble,
+                    shape = RoundedCornerShape(
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomEnd = 18.dp,
+                        bottomStart = 18.dp,
+                    ),
+                ) {
+                    Text(
+                        text = m.text,
+                        modifier = Modifier.padding(
+                            horizontal = DsMetric.BUBBLE_PAD_H.dp,
+                            vertical = DsMetric.BUBBLE_PAD_V.dp,
+                        ),
+                        fontSize = DsMetric.BODY_SIZE.sp,
+                        lineHeight = DsMetric.LABEL_LINE.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = ds.bubbleText,
+                    )
+                }
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = DsMetric.MSG_PAD_X.dp, end = 14.dp, top = 11.43.dp)
+            ) {
+                if (m.reasoning.isNotBlank() || (m.streaming && m.text.isBlank())) {
+                    ThinkingRow(
+                        reasoning = m.reasoning,
+                        thinking = m.streaming && m.text.isBlank(),
+                        thinkSeconds = m.thinkSeconds,
+                        hasImages = m.hasImages,
+                        steps = m.steps,
+                    )
+                }
+                if (m.text.isNotBlank()) {
+                    MarkdownView(m.text)
+                    Spacer(Modifier.height(2.dp))
+                }
+                    if (m.error) {
+                    Text(
+                        text = "请求失败，请检查 API Key / 网络 / 模型名",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+
+                if (m.citations.isNotEmpty()) {
+                    // 官方：回答下方一个药丸，左边一排网站小圆标，右边「N 个网页」
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(13.33.dp))
+                            .background(Color(0xFFF5F5F5))
+                            .padding(start = 8.00.dp, end = 10.16.dp, top = 4.57.dp, bottom = 4.57.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SourceAvatars(m.citations, 14.00.dp)
+                        Spacer(Modifier.width(6.10.dp))
+                        Text(
+                            text = "${m.citations.size} 个网页",
+                            fontSize = 13.33.sp,
+                            color = ds.thoughtText,
+                        )
+                    }
+                }
+                if (!m.streaming && m.text.isNotBlank()) {
+                    ActionRow(
+        onCopy = { onCopy(m.text) },
+        onRead = { DsTts.onRead(m.text) },
+        onShare = { shareText(ctx, m.text) },
+        onRegenerate = { onRegenerateFrom(m) },
+    )
+                }
+            }
+        }
+
+        if (menu) {
+            MsgMenu(
+                role = m.role,
+                onDismiss = { menu = false },
+                anchor = anchor,
+                onCopy = { onCopy(m.text); menu = false },
+                onEdit = { onEdit(m); menu = false },
+                onRegenerate = { onRegenerateFrom(m); menu = false },
+                onDelete = { onDeleteFrom(m); menu = false },
+                onContext = { onShowContext(); menu = false },
+                onShare = { shareText(ctx, m.text); menu = false },
+                onSelectText = { selecting = true; menu = false },
+            )
+        }
+        if (selecting) SelectTextDialog(m.text) { selecting = false }
+    }
+}
+
+/* --------------------------------------------------------------- 思考行 */
+
+/**
+ * 官方思考行（真机实测）：
+ *  - 流式中：label「正在思考」+ 上下展开图标（ic_chevron_expand_vertical_outline_20），正文一直显示，无圆点
+ *  - 结束后：label「已思考（用时 N 秒）」+ 向下 chevron，点开才显示正文，正文带圆点
+ *  - 正文：左侧 1dp 竖线（x=30.5dp），文字 x=46.5dp，灰色 #7D7F85，17sp/25.52
+ */
+@Composable
+private fun ThinkingRow(reasoning: String, thinking: Boolean, thinkSeconds: Int, hasImages: Boolean = false, steps: List<app.dsclone.data.Step> = emptyList()) {
+    val ds = LocalDsColors.current
+    val thinkingNow = thinking || app.dsclone.DsDebug.forceThinking
+    var expanded by remember { mutableStateOf(false) }
+    val showBody = thinkingNow || expanded
+    val label = when {
+        thinkingNow && hasImages && reasoning.isBlank() -> "正在分析图片"
+        thinkingNow -> "正在思考"
+        thinkSeconds > 0 -> "已思考（用时 $thinkSeconds 秒）"
+        else -> "已思考"
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(DsMetric.THINK_ROW_H.dp)
+                .clickable(enabled = !thinkingNow && reasoning.isNotBlank()) { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (thinkingNow) {
+                // 官方：思考中"正在思考"有 1.5s 扫光，字号 16.75
+                val shimmer = androidx.compose.animation.core.rememberInfiniteTransition(label = "thinkTitle")
+                val sx by shimmer.animateFloat(
+                    initialValue = -0.6f,
+                    targetValue = 1.6f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(
+                            1500,
+                            easing = androidx.compose.animation.core.LinearEasing,
+                        ),
+                    ),
+                    label = "shimmerX",
+                )
+                Text(
+                    text = label,
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontSize = 16.75.sp,
+                        lineHeight = DsMetric.LABEL_LINE.sp,
+                        brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                            colors = listOf(
+                                ds.subText,
+                                Color(0xFFD9DADC),
+                                ds.subText,
+                            ),
+                            start = androidx.compose.ui.geometry.Offset(sx * 260f, 0f),
+                            end = androidx.compose.ui.geometry.Offset(sx * 260f + 120f, 0f),
+                        ),
+                    ),
+                )
+            } else {
+                Text(
+                    text = label,
+                    color = ds.subText,
+                    fontSize = DsMetric.BODY_SIZE.sp,
+                    lineHeight = DsMetric.LABEL_LINE.sp,
+                )
+            }
+            Spacer(Modifier.width(3.81.dp))
+            Icon(
+                painter = painterResource(
+                    if (thinkingNow) R.drawable.ic_chevron_expand_vertical_outline_20
+                    else if (expanded) R.drawable.ic_chevron_down_outline_20
+                    else R.drawable.ic_chevron_right_outline_20
+                ),
+                contentDescription = if (thinkingNow) "思考中" else if (expanded) "折叠" else "展开",
+                tint = ds.subText,
+                modifier = Modifier.size(DsMetric.THINK_CHEVRON.dp),
+            )
+        }
+        // 流式刚开始时 reasoning 还是空的，也要把"线 + 点"画出来，否则看不到那个呼吸的点
+        val showLine = showBody && reasoning.isNotBlank()
+        if (showLine) {
+            Row(
+                Modifier
+                    .padding(bottom = 8.dp)
+                    .then(if (reasoning.isBlank()) Modifier.height(25.52.dp) else Modifier.height(IntrinsicSize.Min))
+            ) {
+                // 官方：一条连续竖线（x=7.64dp）+ 每段开头一个圆点，圆点**圆心压在竖线上**
+                // 线占 [7.64, 8.64]，圆心 8.14；点 4.57 宽 → 起点 5.85
+                Box(Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(top = 2.dp, end = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.16.dp),
+                    ) {
+                        // 官方是「逐步交错」：每步自己的思考 → 该步的搜索/浏览行 → … → 最后一步的正文
+                        // （文档：message.reasoning_content 只有最后一步的思考，前面的在各 step 里）
+                        fun paragraphs(text: String) =
+                            text.split(Regex("\n\\s*\n")).filter { it.isNotBlank() }
+
+                        @Composable
+                        fun StepRow(st: app.dsclone.data.Step) {
+                            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+                                // 官方：这一行的线在图标处断开，只画上下两段
+                                Box(Modifier.width(15.24.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                                    Canvas(Modifier.fillMaxSize()) {
+                                        val x = 7.64.dp.toPx() + 0.5.dp.toPx()
+                                        val half = 6.67.dp.toPx()
+                                        val cy = size.height / 2f
+                                        drawLine(Color(0xFFE5E5E5), Offset(x, 0f), Offset(x, cy - half), 1.dp.toPx())
+                                        drawLine(Color(0xFFE5E5E5), Offset(x, cy + half), Offset(x, size.height), 1.dp.toPx())
+                                    }
+                                    Icon(
+                                        painter = painterResource(
+                                            if (st.action == "search") R.drawable.ic_search_outline_16
+                                            else R.drawable.ic_browse_outline_16
+                                        ),
+                                        contentDescription = null,
+                                        tint = ds.thoughtText,
+                                        modifier = Modifier.size(13.33.dp),
+                                    )
+                                }
+                                Text(
+                                    text = when {
+                                        st.action == "search" -> "搜索到 ${st.count} 个网页"
+                                        st.action == "find_in_page" -> "在页面内查找"
+                                        else -> "已浏览 ${st.count} 个页面"
+                                    },
+                                    fontSize = 15.sp,
+                                    color = ds.thoughtText,
+                                )
+                                if (st.sources.isNotEmpty()) {
+                                    Spacer(Modifier.width(6.10.dp))
+                                    SourceAvatars(st.sources, 13.33.dp)
+                                }
+                            }
+                        }
+
+                        @Composable
+                        fun Para(text: String) {
+                            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                                // 这一段的竖线 + 段首圆点
+                                Box(Modifier.width(15.24.dp).fillMaxHeight()) {
+                                    Canvas(Modifier.fillMaxSize()) {
+                                        val x = 7.64.dp.toPx() + 0.5.dp.toPx()
+                                        drawLine(
+                                            color = Color(0xFFE5E5E5),
+                                            start = Offset(x, 0f),
+                                            end = Offset(x, size.height),
+                                            strokeWidth = 1.dp.toPx(),
+                                        )
+                                        drawCircle(
+                                            color = Color(0xFFA2A4A6),
+                                            radius = 2.285.dp.toPx(),
+                                            center = Offset(x, 9.79.dp.toPx()),
+                                        )
+                                    }
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    MarkdownView(text, textColor = ds.thoughtText, compact = true)
+                                }
+                            }
+                        }
+
+                        // 先按步序输出「该步自己的思考 + 该步的步骤行」
+                        for (st in steps) {
+                            for (t in paragraphs(st.reasoning)) Para(t)
+                            if (st.count > 0) StepRow(st)
+                        }
+                        // 最后一步的思考在 message.reasoning 里
+                        for (t in paragraphs(reasoning)) Para(t)
+                    }
+                }
+            }
+        }
+    }
+}
+/* --------------------------------------------------------------- 操作行 */
+
+@Composable
+private fun ActionRow(onCopy: () -> Unit, onRead: () -> Unit, onShare: () -> Unit, onRegenerate: () -> Unit) {
+    val ds = LocalDsColors.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ActionCell(R.drawable.ic_copy_outline, "复制", onCopy)
+        ActionCell(R.drawable.ic_play_media_outline_20, "朗读", onRead)
+        ActionCell(R.drawable.ic_share_outline_20, "分享", onShare)
+        Spacer(Modifier.weight(1f))
+        ActionCell(R.drawable.ic_refresh_outline_20, "重新生成", onRegenerate)
+    }
+}
+
+@Composable
+private fun ActionCell(icon: Int, label: String, onClick: () -> Unit) {
+    val ds = LocalDsColors.current
+    Box(
+        Modifier
+            .size(38.10.dp, 45.71.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = label,
+            tint = ds.iconGray,
+            modifier = Modifier.size(19.05.dp),
+        )
+    }
+}
+
+/* --------------------------------------------------------------- 长按菜单 */
+
+@Composable
+private fun MsgMenu(
+    role: String,
+    anchor: androidx.compose.ui.geometry.Offset,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onEdit: () -> Unit,
+    onRegenerate: () -> Unit,
+    onDelete: () -> Unit,
+    onContext: () -> Unit,
+    onShare: () -> Unit,
+    onSelectText: () -> Unit,
+) {
+    val ds = LocalDsColors.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val w = 198.10.dp
+    val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val screenH = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
+    val xDp = (anchor.x / density.density).coerceIn(8f, (screenW - 206.10f).coerceAtLeast(8f))
+    val yDp = (anchor.y / density.density).coerceIn(60f, (screenH - 320f).coerceAtLeast(60f))
+    val shown = remember { androidx.compose.animation.core.MutableTransitionState(false) }
+    shown.targetState = true
+
+    androidx.compose.ui.window.Popup(
+        offset = androidx.compose.ui.unit.IntOffset(
+            (xDp * density.density).toInt(),
+            (yDp * density.density).toInt(),
+        ),
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+    ) {
+        androidx.compose.animation.AnimatedVisibility(
+            visibleState = shown,
+            enter = androidx.compose.animation.fadeIn(
+                androidx.compose.animation.core.tween(140)
+            ) + androidx.compose.animation.scaleIn(
+                initialScale = 0.88f,
+                animationSpec = androidx.compose.animation.core.tween(160),
+            ),
+            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(100)),
+        ) {
+            androidx.compose.material3.Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(16.dp),
+                shadowElevation = 12.dp,
+                modifier = Modifier.width(w),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    MenuItem(R.drawable.ic_copy_outline, "复制", onCopy)
+                    if (role == "user") MenuItem(R.drawable.ic_edit_outline_20, "修改", onEdit)
+                    MenuItem(R.drawable.ic_share_outline_20, "分享", onShare)
+                    MenuItem(R.drawable.ic_text_select, "选择文本", onSelectText)
+                    if (role != "user") MenuItem(R.drawable.ic_refresh_outline_20, "重新生成", onRegenerate)
+                    MenuItem(R.drawable.ic_trash_outline_20, "删除", onDelete, danger = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuItem(icon: Int, label: String, onClick: () -> Unit, danger: Boolean = false) {
+    val ds = LocalDsColors.current
+    val tint = if (danger) Color(0xFFEC1313) else ds.bodyText
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(45.71.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(19.05.dp),
+        )
+        Spacer(Modifier.width(10.16.dp))
+        Text(label, fontSize = 16.sp, color = tint)
+    }
+}
+
+/* --------------------------------------------------------------- 引用小圆标 */
+
+@Composable
+fun SourceAvatars(sources: List<app.dsclone.data.Source>, size: androidx.compose.ui.unit.Dp = 14.00.dp) {
+    val palette = listOf(
+        Color(0xFF4C8DF6), Color(0xFF34A853), Color(0xFFF5A623), Color(0xFFE0507A),
+        Color(0xFF7B61FF), Color(0xFF00A6A6), Color(0xFFEA6B3E), Color(0xFF5F6368),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        sources.take(5).forEachIndexed { i, src ->
+            val key = src.siteName.ifBlank {
+                src.url.substringAfter("://").substringBefore('/').removePrefix("www.")
+            }
+            val idx = (key.hashCode().let { if (it < 0) -it else it }) % palette.size
+            val letter = key.firstOrNull()?.uppercaseChar()?.toString() ?: "•"
+            Box(
+                Modifier
+                    .then(if (i == 0) Modifier else Modifier.offset(x = (-4.00).dp))
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(palette[idx])
+                    .border(1.dp, Color.White, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                // 官方：真实站点 favicon（site_icon 是 cdn.deepseek.com 上的 png）
+                if (src.siteIcon.isNotBlank()) {
+                    coil.compose.AsyncImage(
+                        model = src.siteIcon,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                    )
+                } else {
+                    Text(
+                        text = letter,
+                        color = Color.White,
+                        fontSize = (size.value * 0.62f).sp,
+                        lineHeight = (size.value * 0.62f).sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/* --------------------------------------------------------------- 转至底部 */
+
+@Composable
+fun ScrollToBottomButton(onClick: () -> Unit) {
+    val ds = LocalDsColors.current
+    Box(
+        Modifier
+            .size(45.71.dp)
+            .shadow(elevation = 6.dp, shape = CircleShape, clip = false)
+            .clip(CircleShape)
+            .background(Color.White)
+            .border(
+                width = 1.5.dp,
+                brush = androidx.compose.ui.graphics.Brush.sweepGradient(
+                    listOf(
+                        DsBlue.copy(alpha = 0.55f),
+                        DsBlue.copy(alpha = 0.10f),
+                        DsBlue.copy(alpha = 0.55f),
+                    )
+                ),
+                shape = CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_chevron_down_outline_20),
+            contentDescription = "转至底部",
+            tint = ds.bodyText,
+            modifier = Modifier.size(19.05.dp),
+        )
+    }
+}
+
+/* --------------------------------------------------- 分享 / 选择文本 */
+
+/**
+ * 分享：官方是「分享成图片/链接」，链接对我们没意义，这里直接把正文丢进系统分享面板。
+ */
+fun shareText(ctx: android.content.Context, text: String) {
+    if (text.isBlank()) return
+    runCatching {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        ctx.startActivity(android.content.Intent.createChooser(send, "分享"))
+    }
+}
+
+/**
+ * 选择文本：官方点「选择文本」会进入可选状态，能拖选并复制。
+ * 这里用 SelectionContainer 把整条正文放出来，长按即可选、松开弹系统复制菜单。
+ */
+@Composable
+fun SelectTextDialog(text: String, onDismiss: () -> Unit) {
+    val ds = LocalDsColors.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.White)
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+        ) {
+            Text("选择文本", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = ds.bodyText)
+            Spacer(Modifier.height(12.dp))
+            androidx.compose.foundation.text.selection.SelectionContainer(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(text = text, fontSize = 15.sp, lineHeight = 24.sp, color = ds.bodyText)
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text(
+                    text = "复制全部",
+                    fontSize = 16.sp,
+                    color = DsBlue,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("text", text))
+                            onDismiss()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "关闭",
+                    fontSize = 16.sp,
+                    color = ds.subText,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}

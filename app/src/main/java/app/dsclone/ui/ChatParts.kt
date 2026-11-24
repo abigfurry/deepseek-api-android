@@ -988,12 +988,12 @@ private fun ActionRow(
             // 官方「上一条/n/N/下一条」组到第一个操作图标的间隔（实测约 4.5dp）
             Spacer(Modifier.width(4.5.dp))
         }
-        ActionCell(R.drawable.ic_copy_outline, "复制", onClick = onCopy)
+        ActionCell(R.drawable.ic_copy_outline, I18n.t("复制", "Copy"), onClick = onCopy)
         TtsActionCell(msgId, onRead)
-        ActionCell(R.drawable.ic_share_outline_20, "分享", onClick = onShare)
+        ActionCell(R.drawable.ic_share_outline_20, I18n.t("分享", "Share"), onClick = onShare)
         Spacer(Modifier.weight(1f))
         // 官方「重新生成」单元格 45dp、贴右缘（x=705.5…750.5）
-        ActionCell(R.drawable.ic_refresh_outline_20, "重新生成", w = DsMetric.actionRegenCell.dp, onClick = onRegenerate)
+        ActionCell(R.drawable.ic_refresh_outline_20, I18n.t("重新生成", "Regenerate"), w = DsMetric.actionRegenCell.dp, onClick = onRegenerate)
     }
 }
 
@@ -1145,12 +1145,13 @@ private fun MsgMenu(
                 modifier = Modifier.width(w),
             ) {
                 Column(Modifier.fillMaxWidth()) {
-                    MenuItem(R.drawable.ic_copy_outline, "复制", onCopy)
-                    if (role == "user") MenuItem(R.drawable.ic_edit_outline_20, "修改", onEdit)
-                    MenuItem(R.drawable.ic_share_outline_20, "分享", onShare)
-                    MenuItem(R.drawable.ic_text_select, "选择文本", onSelectText)
-                    if (role != "user") MenuItem(R.drawable.ic_refresh_outline_20, "重新生成", onRegenerate)
-                    MenuItem(R.drawable.ic_trash_outline_20, "删除", onDelete, danger = true)
+                    // 官方英文：copy / edit / share / message_select_text / message_press_regenerate / delete
+                    MenuItem(R.drawable.ic_copy_outline, I18n.t("复制", "Copy"), onCopy)
+                    if (role == "user") MenuItem(R.drawable.ic_edit_outline_20, I18n.t("修改", "Edit"), onEdit)
+                    MenuItem(R.drawable.ic_share_outline_20, I18n.t("分享", "Share"), onShare)
+                    MenuItem(R.drawable.ic_text_select, I18n.t("选择文本", "Select text"), onSelectText)
+                    if (role != "user") MenuItem(R.drawable.ic_refresh_outline_20, I18n.t("重新生成", "Regenerate"), onRegenerate)
+                    MenuItem(R.drawable.ic_trash_outline_20, I18n.t("删除", "Delete"), onDelete, danger = true)
                 }
             }
         }
@@ -1491,7 +1492,8 @@ private fun TtsActionCell(msgId: Long, onClick: () -> Unit) {
             else -> {
                 Icon(
                     painter = painterResource(R.drawable.ic_play_media_outline_20),
-                    contentDescription = "朗读",
+                    // read_aloud_start_label：朗读 / Read aloud
+                    contentDescription = I18n.t("朗读", "Read aloud"),
                     tint = ds.iconGray,
                     modifier = Modifier.size(DsMetric.actionIcon.dp),
                 )

@@ -1,0 +1,128 @@
+﻿package app.dsclone.data
+
+data class Source(
+    val url: String = "",
+    val title: String = "",
+    val siteName: String = "",
+    val siteIcon: String = "",
+)
+
+/** 联网工具的一步：search / open_page / find_in_page / read_link */
+data class Step(
+    val kind: String = "",
+    val action: String = "",
+    val queries: List<String> = emptyList(),
+    val url: String = "",
+    val count: Int = 0,
+    val sources: List<Source> = emptyList(),
+    val reasoning: String = "",
+    val status: String = "",
+)
+
+data class Msg(
+    val id: Long = System.nanoTime(),
+    val role: String,
+    val text: String = "",
+    val reasoning: String = "",
+    val error: Boolean = false,
+    val streaming: Boolean = false,
+    val thinkSeconds: Int = 0,
+    /** 这条 user 消息是否带图片，用来显示「正在分析图片」 */
+    val hasImages: Boolean = false,
+    /** 联网/阅读步骤（官方思考链里的「搜索到 N 个网页」那一行） */
+    val steps: List<Step> = emptyList(),
+    val serverToolCalls: String = "",
+    val citations: List<Source> = emptyList(),
+)
+
+data class Session(
+    val id: String,
+    val title: String,
+    val updatedAt: Long = System.currentTimeMillis(),
+    val messages: List<Msg> = emptyList(),
+    /** 官方侧边栏的「置顶」分组 */
+    val pinned: Boolean = false,
+)
+
+data class Provider(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val models: List<String>,
+)
+
+val Providers: List<Provider> = listOf(
+    Provider(
+        "deepseek",
+        "DeepSeek",
+        "https://api.deepseek.com",
+        listOf("deepseek-flash", "deepseek-chat", "deepseek-reasoner"),
+    ),
+    Provider(
+        "openai",
+        "OpenAI",
+        "https://api.openai.com/v1",
+        listOf("gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"),
+    ),
+    Provider(
+        "moonshot",
+        "Moonshot",
+        "https://api.moonshot.cn/v1",
+        listOf("moonshot-v1-8k", "moonshot-v1-32k"),
+    ),
+    Provider(
+        "dashscope",
+        "通义千问",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        listOf("qwen-plus", "qwen-max", "qwen-turbo"),
+    ),
+    Provider(
+        "custom",
+        "自定义",
+        "",
+        listOf(),
+    ),
+)
+
+data class Settings(
+    val providerId: String = "deepseek",
+    val baseUrl: String = "https://api.deepseek.com",
+    val model: String = "deepseek-flash",
+    val thinking: Boolean = false,
+    val search: Boolean = false,
+    val keys: Map<String, String> = emptyMap(),
+    // DeepSeek Chat Completions 的请求参数，设置页里都能调
+    val temperature: Float = 1f,
+    val topP: Float = 1f,
+    val maxTokens: Int = 0,
+    val stop: String = "",
+    val jsonMode: Boolean = false,
+    val systemPrompt: String = "",
+    val reasoningEffort: String = "high",
+    val titleEnabled: Boolean = true,
+    val safety: Boolean = true,
+    val userId: String = "",
+    val includeUsage: Boolean = true,
+) {
+    val apiKey: String
+        get() = keys[providerId] ?: ""
+
+    val provider: Provider
+        get() = Providers.firstOrNull { it.id == providerId } ?: Providers.first()
+
+    fun withKey(key: String): Settings = copy(keys = keys + (providerId to key.trim()))
+}
+
+fun estimateTokens(text: String): Int {
+    if (text.isEmpty()) return 0
+    var cjk = 0
+    var other = 0
+    for (ch in text) {
+        if (ch.code in 0x4E00..0x9FFF || ch.code in 0x3040..0x30FF || ch.code in 0xAC00..0xD7AF) {
+            cjk++
+        } else {
+            other++
+        }
+    }
+    return cjk + other / 4 + 1
+}

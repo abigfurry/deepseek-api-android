@@ -310,7 +310,8 @@ fun SettingsSheet(
                 .background(ds.settingsPage)
         ) {
             SettingsTopBar(
-                title = if (stack.isEmpty()) "设置" else settingsPageTitle(stack.last()),
+                // profile_title：设置 / Settings
+                title = if (stack.isEmpty()) I18n.t("设置", "Settings") else settingsPageTitle(stack.last()),
                 onBack = dismissOrPop,
             )
             Box(
@@ -428,14 +429,18 @@ fun SettingsSheet(
 
         when (dialog) {
             SettingsDialog.LANGUAGE -> ChoiceDialog(
-                title = "语言",
+                // app_language：语言 / Language
+                title = I18n.t("语言", "Language"),
                 icon = "globe",
                 options = LanguageOptions.map { it.id to it.label },
                 selected = s.appLanguage,
                 onConfirm = { id ->
                     s = s.copy(appLanguage = id)
+                    // 立刻生效：I18n 状态一变，所有读了 I18n.t 的界面马上重组换语言
+                    I18n.set(id)
                     dialog = null
-                    showToast("已切换为 ${languageLabel(id)}")
+                    val name = if (id == "system") I18n.t("中文 (简体中文)", "English") else languageLabel(id)
+                    showToast(I18n.t("已切换为 $name", "Switched to $name"))
                 },
                 onDismiss = { dialog = null },
             )
@@ -565,6 +570,19 @@ private fun SettingsTopBar(title: String, onBack: () -> Unit) {
 //  主页面
 // =====================================================================================
 
+/** 外观档位 → 右侧当前值（中/英；官方 app_color_scheme_*）。 */
+private fun appearanceValue(id: String): String = when (id) {
+    "light" -> I18n.t("浅色", "Light")
+    "dark" -> I18n.t("深色", "Dark")
+    else -> I18n.t("系统", "System")
+}
+
+/** 朗读音色 → 右侧当前值（星光/潮汐 是官方 voice_id stella/tide 的中文名，英文用 id 首字母大写）。 */
+private fun voiceDisplayName(id: String): String = when (id) {
+    "tide" -> I18n.t("潮汐", "Tide")
+    else -> I18n.t("星光", "Stella")
+}
+
 @Composable
 private fun MainSettingsPage(
     s: Settings,
@@ -575,72 +593,84 @@ private fun MainSettingsPage(
 ) {
     val ds = LocalDsColors.current
     Column(Modifier.fillMaxWidth()) {
-        DsGroupHeader("账户", topGap = FirstTop)
+        // profile_info_section_header：账户 / Profile
+        DsGroupHeader(I18n.t("账户", "Profile"), topGap = FirstTop)
         DsCard {
-            SettingRow(label = "API 与模型", icon = "api", chevron = true, onClick = { onNavigate(SettingsPage.API) })
-            SettingRow(label = "账号管理", icon = "user", chevron = true, onClick = { onNavigate(SettingsPage.ACCOUNT) })
-            SettingRow(label = "数据管理", icon = "data", chevron = true, onClick = { onNavigate(SettingsPage.DATA) })
+            SettingRow(label = I18n.t("API 与模型", "API & Models"), icon = "api", chevron = true, onClick = { onNavigate(SettingsPage.API) })
+            // account_management：账号管理 / Account settings
+            SettingRow(label = I18n.t("账号管理", "Account settings"), icon = "user", chevron = true, onClick = { onNavigate(SettingsPage.ACCOUNT) })
+            // data_controls：数据管理 / Data controls
+            SettingRow(label = I18n.t("数据管理", "Data controls"), icon = "data", chevron = true, onClick = { onNavigate(SettingsPage.DATA) })
         }
 
-        DsGroupHeader("应用")
+        // app_section_title：应用 / App
+        DsGroupHeader(I18n.t("应用", "App"))
         DsCard {
             SettingRow(
-                label = "语言",
+                label = I18n.t("语言", "Language"),
                 icon = "globe",
-                value = if (s.appLanguage == "system") "中文 (简体中文)" else languageLabel(s.appLanguage),
+                value = if (s.appLanguage == "system") I18n.t("中文 (简体中文)", "English") else languageLabel(s.appLanguage),
                 chevron = true,
                 onClick = { onDialog(SettingsDialog.LANGUAGE) },
             )
             SettingRow(
-                label = "外观",
+                // app_color_scheme：外观 / Appearance
+                label = I18n.t("外观", "Appearance"),
                 icon = "sun",
-                value = appearanceLabel(s.appearance),
+                value = appearanceValue(s.appearance),
                 chevron = true,
                 onClick = { onDialog(SettingsDialog.APPEARANCE) },
             )
-            SettingRow(label = "字体大小", icon = "aa", chevron = true, onClick = { onNavigate(SettingsPage.FONT) })
-            SettingRow(label = "个性化", icon = "magic", chevron = true, onClick = { onNavigate(SettingsPage.PERSONAL) })
+            // font_size：字体大小 / Font size
+            SettingRow(label = I18n.t("字体大小", "Font size"), icon = "aa", chevron = true, onClick = { onNavigate(SettingsPage.FONT) })
+            // personalization：个性化 / Personalization
+            SettingRow(label = I18n.t("个性化", "Personalization"), icon = "magic", chevron = true, onClick = { onNavigate(SettingsPage.PERSONAL) })
         }
 
-        DsGroupHeader("语音")
+        // 语音 / Voice
+        DsGroupHeader(I18n.t("语音", "Voice"))
         DsCard {
             // 官方：朗读音色是一个独立子页（两张音色卡片），不再是弹窗
             SettingRow(
-                label = "朗读音色",
+                // voice_switch_bottom_sheet_title：朗读音色 / Voice
+                label = I18n.t("朗读音色", "Voice"),
                 icon = "speaker",
-                value = VoiceOptions.firstOrNull { it.id == s.voiceId }?.name ?: "星光",
+                value = voiceDisplayName(s.voiceId),
                 chevron = true,
                 onClick = { onNavigate(SettingsPage.VOICE) },
             )
         }
 
-        DsGroupHeader("关于")
+        // profile_about_section_header：关于 / About
+        DsGroupHeader(I18n.t("关于", "About"))
         DsCard {
             SettingRow(
-                label = "关于",
+                label = I18n.t("关于", "About"),
                 icon = "info",
-                value = "非官方客户端",
+                value = I18n.t("非官方客户端", "Unofficial client"),
                 chevron = false,
-                onClick = { onToast("DeepSeek 非官方客户端 · $versionText") },
+                onClick = { onToast(I18n.t("DeepSeek 非官方客户端 · $versionText", "DeepSeek unofficial client · $versionText")) },
             )
             SettingRow(
-                label = "检查更新",
+                // profile_check_for_updates：检查更新 / Check for updates
+                label = I18n.t("检查更新", "Check for updates"),
                 icon = "info",
                 value = versionText,
                 chevron = true,
-                onClick = { onToast("当前已是最新版本") },
+                onClick = { onToast(I18n.t("当前已是最新版本", "You are already on the latest version.")) },
             )
-            SettingRow(label = "服务协议", icon = "doc", chevron = true, onClick = { onNavigate(SettingsPage.TERMS) })
+            // terms_of_use：服务协议 / Terms of Use
+            SettingRow(label = I18n.t("服务协议", "Terms of Use"), icon = "doc", chevron = true, onClick = { onNavigate(SettingsPage.TERMS) })
             // 防侵权 / 免责：完整声明页（ui/Legal.kt 的 LEGAL_TEXT）
             SettingRow(
-                label = "版权与免责声明",
+                label = I18n.t("版权与免责声明", "Copyright & Disclaimer"),
                 icon = "doc",
                 chevron = true,
                 onClick = { onNavigate(SettingsPage.LEGAL) },
             )
             // 开源：仓库地址 / Releases / 协议 / 第三方组件（OpenSourcePage.kt）
             SettingRow(
-                label = "开源项目",
+                label = I18n.t("开源项目", "Open source"),
                 icon = "info",
                 value = "MIT",
                 chevron = true,
@@ -649,18 +679,23 @@ private fun MainSettingsPage(
         }
 
         DsCard(topGap = SectionGap) {
-            SettingRow(label = "帮助与反馈", icon = "help", chevron = true, onClick = { onNavigate(SettingsPage.HELP) })
+            // profile_help_and_feedback：帮助与反馈 / Help & Feedback
+            SettingRow(label = I18n.t("帮助与反馈", "Help & Feedback"), icon = "help", chevron = true, onClick = { onNavigate(SettingsPage.HELP) })
         }
         DsCard(topGap = SectionGap) {
-            SettingRow(label = "退出登录", icon = "logout", chevron = false, onClick = { onDialog(SettingsDialog.LOGOUT) })
+            // profile_logout：退出登录 / Log out
+            SettingRow(label = I18n.t("退出登录", "Log out"), icon = "logout", chevron = false, onClick = { onDialog(SettingsDialog.LOGOUT) })
         }
 
         Text(
             // 官方页脚里的「模型名称 / 备案号 / 浙ICP备…」是 DeepSeek 官方的备案信息，
             // 我们不是官方、也没有那个备案号，照抄属于冒用 → 已全部删掉，换成自己的说明。
-            text = "DeepSeekAPI版本 · 非官方客户端\n" +
-                "内容由 AI 生成，请仔细甄别，并合法使用\n" +
-                "联系邮箱：" + com.yuyuyu.deepseek.ui.LEGAL_CONTACT_EMAIL,
+            text = I18n.t(
+                "DeepSeekAPI版本 · 非官方客户端\n" +
+                    "内容由 AI 生成，请仔细甄别，并合法使用\n",
+                "DeepSeek API version · Unofficial client\n" +
+                    "AI-generated, for reference only. Use legally.\n",
+            ) + I18n.t("联系邮箱：", "Contact: ") + com.yuyuyu.deepseek.ui.LEGAL_CONTACT_EMAIL,
             fontSize = FootSize,
             lineHeight = 19.sp,
             color = ds.secondary,

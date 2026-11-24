@@ -201,7 +201,8 @@ fun DrawerContent(
                 )
             } else {
                 Text(
-                    text = "搜索对话内容...",
+                    // search_hint：搜索对话内容... / Search chat content...
+                    text = I18n.t("搜索对话内容...", "Search chat content..."),
                     // 官方：搜索占位 17sp、色 #8E9094 —— 实测 audit-drawer.png / ui (105,102)
                     fontSize = 17.sp,
                     lineHeight = 22.sp,
@@ -240,13 +241,14 @@ fun DrawerContent(
             val pinnedList = sessions.filter { it.pinned }
             val rest = sessions.filter { !it.pinned }
             buildList {
-                if (pinnedList.isNotEmpty()) add("置顶" to pinnedList)
+                if (pinnedList.isNotEmpty()) add(I18n.t("置顶", "Pinned") to pinnedList)
                 addAll(rest.groupBy { s ->
                 when {
-                    s.updatedAt >= today -> "今天"
-                    s.updatedAt >= today - day -> "昨天"
-                    s.updatedAt >= today - 7 * day -> "7 天内"
-                    else -> "更早"
+                    // session_history_timeline_label_today / _yesterday：今天 / Today、昨天 / Yesterday
+                    s.updatedAt >= today -> I18n.t("今天", "Today")
+                    s.updatedAt >= today - day -> I18n.t("昨天", "Yesterday")
+                    s.updatedAt >= today - 7 * day -> I18n.t("7 天内", "Last 7 days")
+                    else -> I18n.t("更早", "Earlier")
                 }
             }.toList())
             }
@@ -266,7 +268,8 @@ fun DrawerContent(
                 } else if (results.isEmpty()) {
                     item {
                         Text(
-                            text = "没有找到相关内容",
+                            // search_empty_result：没有找到相关内容 / No relevant results
+                            text = I18n.t("没有找到相关内容", "No relevant results"),
                             fontSize = 14.sp,
                             color = ds.thoughtText,
                             modifier = Modifier.padding(start = 21.00.dp, top = 12.dp),
@@ -394,7 +397,8 @@ fun DrawerContent(
                 AvatarView(path = settings.avatarPath, size = DsMetric.drawerAvatar.dp)
             }
             Text(
-                text = settings.nickName.ifBlank { "本地账号" },
+                // 本地账号 / Local account（官方此处显示登录昵称，本地版没有账号体系）
+                text = settings.nickName.ifBlank { I18n.t("本地账号", "Local account") },
                 modifier = Modifier
                     .weight(1f)
                     // 官方：昵称 x=54.5dp（15 + 30 头像 + 9.5）—— 官方：ui (109,2036)
