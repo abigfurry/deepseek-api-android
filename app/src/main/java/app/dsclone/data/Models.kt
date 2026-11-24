@@ -223,6 +223,9 @@ data class Settings(
     val followSystemFont: Boolean = true,
     /** 个性化-思考内容自动折叠（官方 thinking_auto_fold，默认开） */
     val autoFoldThinking: Boolean = true,
+    /** 自定义人格：开启后所有对话都带这段系统提示词（在数据管理里设置） */
+    val personaEnabled: Boolean = false,
+    val personaPrompt: String = "",
     /** 数据管理-数据用于优化体验（官方 profile_imporve_model，默认开） */
     val trainOnData: Boolean = true,
     /**

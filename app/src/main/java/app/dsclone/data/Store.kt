@@ -113,6 +113,8 @@ object Store {
                 followSystemFont = o.optBoolean("followSystemFont", true),
                 autoFoldThinking = o.optBoolean("autoFoldThinking", true),
                 trainOnData = o.optBoolean("trainOnData", true),
+                personaEnabled = o.optBoolean("personaEnabled", false),
+                personaPrompt = str(o, "personaPrompt"),
                 preloadHistory = o.optBoolean("preloadHistory", false),
                 appLanguage = str(o, "appLanguage", "system"),
                 // 朗读音色：新字段是 voiceId；老版本写的是 voice，两个都认，缺省 stella
@@ -190,6 +192,8 @@ object Store {
             .put("followSystemFont", s.followSystemFont)
             .put("autoFoldThinking", s.autoFoldThinking)
             .put("trainOnData", s.trainOnData)
+            .put("personaEnabled", s.personaEnabled)
+            .put("personaPrompt", s.personaPrompt)
             .put("preloadHistory", s.preloadHistory)
             .put("appLanguage", s.appLanguage)
             .put("voiceId", s.voiceId)

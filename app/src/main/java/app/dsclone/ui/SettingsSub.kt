@@ -601,6 +601,8 @@ private fun DataPage(
     var showImportGuide by remember { mutableStateOf(false) }
     // 点「导入聊天记录」先弹提示：本机数据清除/卸载就会丢，且导入是覆盖+追加的合并
     var showImportConfirm by remember { mutableStateOf(false) }
+    // 自定义人格：编辑提示词弹窗
+    var showPersona by remember { mutableStateOf(false) }
 
     // 导出聊天记录：SAF CreateDocument，默认文件名 dsclone-chats.json。
     // 真正的写文件在 DsApp 里（流式写 + 进度框），这里只把 Uri 交上去 —— 会话多的时候
@@ -634,6 +636,21 @@ private fun DataPage(
             )
         }
         DsSupporting("关闭（推荐）：启动只读会话索引、秒进 App，打开哪个对话才读哪段内容。开启：启动时把全部消息读进内存，全局搜索最快，但历史很大时要等几秒。改完下次启动生效。")
+
+        DsCard(topGap = 26.5.dp) {
+            SettingSwitchRow(
+                "自定义人格（所有对话通用）",
+                s.personaEnabled,
+                { onChange(s.copy(personaEnabled = it)) },
+            )
+            SettingRow(
+                label = "人格提示词",
+                value = if (s.personaPrompt.isBlank()) "未设置" else "已设置",
+                chevron = true,
+                onClick = { showPersona = true },
+            )
+        }
+        DsSupporting("打开后，每次请求都会把这段人格设定放到系统提示词最前面，所有对话都生效；留空则等于不启用。")
 
         DsCard(topGap = 26.5.dp) {
             SettingRow("我共享的链接", chevron = true, onClick = { onNavigate(SettingsPage.DOC_SHARE) })
@@ -729,6 +746,74 @@ private fun DataPage(
                                         "*/*",
                                     )
                                 )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    // 自定义人格：编辑提示词
+    if (showPersona) {
+        var personaText by remember(showPersona) { mutableStateOf(s.personaPrompt) }
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showPersona = false }) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(ds.cardBg)
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+            ) {
+                Text("自定义人格", fontSize = 18.sp, color = ds.bodyText)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "写一段人设 / 角色设定，打开上面的开关后对所有对话生效。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = ds.secondary,
+                )
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = personaText,
+                    onValueChange = { personaText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(170.dp),
+                    placeholder = {
+                        Text(
+                            "例如：你是一个耐心的高中数学老师，讲解分步骤、先讲思路再给答案…",
+                            fontSize = 13.sp,
+                        )
+                    },
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(
+                        "取消",
+                        fontSize = 16.sp,
+                        color = ds.secondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { showPersona = false }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "保存",
+                        fontSize = 16.sp,
+                        color = DsBlue,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                val t = personaText.trim()
+                                onChange(
+                                    s.copy(
+                                        personaPrompt = t,
+                                        personaEnabled = if (t.isBlank()) false else true,
+                                    )
+                                )
+                                showPersona = false
                             }
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                     )

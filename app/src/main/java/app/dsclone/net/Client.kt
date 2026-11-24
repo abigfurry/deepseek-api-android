@@ -152,9 +152,10 @@ object Client {
     if (preset.supportsReasoningEffort && settings.reasoningEffort != "high" && !settings.thinking) {
         payload.put("reasoning_effort", settings.reasoningEffort)
     }
-    if (settings.systemPrompt.isNotBlank()) {
+    val sysPrompt = effectiveSystemPrompt(settings)
+    if (sysPrompt.isNotBlank()) {
         // system 消息放最前面：有的 OpenAI 兼容服务端不允许多条 system
-        msgs.put(0, JSONObject().put("role", "system").put("content", settings.systemPrompt.trim()))
+        msgs.put(0, JSONObject().put("role", "system").put("content", sysPrompt))
     }
         if (isDeepSeek) {
             payload.put("thinking", JSONObject().put("type", if (settings.thinking) "enabled" else "disabled"))
@@ -237,8 +238,9 @@ object Client {
             .put("model", modelFor(settings, imageDataUrls))
             .put("input", input)
             .put("stream", true)
-        if (settings.systemPrompt.isNotBlank()) {
-            payload.put("instructions", settings.systemPrompt.trim())
+        val sysPromptResp = effectiveSystemPrompt(settings)
+        if (sysPromptResp.isNotBlank()) {
+            payload.put("instructions", sysPromptResp)
         }
         // 只发 Responses 官方字段；thinking/tools 等 chat 专属字段一律不带，避免 400
         if (preset.supportsTemperature) payload.put("temperature", settings.temperature.toDouble())
@@ -538,4 +540,15 @@ object Client {
             ""
         }
     }
+}
+
+/** 自定义人格（设置→数据管理里打开）优先，其次才是「系统提示词」；两者都有就拼在一起。 */
+private fun effectiveSystemPrompt(s: com.yuyuyu.deepseek.data.Settings): String {
+    val sb = StringBuilder()
+    if (s.personaEnabled && s.personaPrompt.isNotBlank()) sb.append(s.personaPrompt.trim())
+    if (s.systemPrompt.isNotBlank()) {
+        if (sb.isNotEmpty()) sb.append("\n\n")
+        sb.append(s.systemPrompt.trim())
+    }
+    return sb.toString()
 }
