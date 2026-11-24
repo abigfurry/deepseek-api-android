@@ -1116,10 +1116,17 @@ $$
 
     if (voiceHolding || voice.recognizing) {
         androidx.compose.foundation.layout.Box(
-            // 官方：侧边栏收起时浮层铺满整屏；侧边栏展（平板两栏）时只在话栏
-    Modifier
+            // 官方：侧边栏收起时浮层铺满整屏；侧边栏展开（平板两栏）时只盖聊天栏。
+            // 注意这里必须用**真实抽屉宽 + 1dp 分隔线**（以前写死 311.48dp：
+            // 抽屉改为 min(326,0.8W) 之后就短了一截，录音浮层左侧漏出一条白色缝隙，
+            // 用户看到的「语音输入左边有白边」就是它）。
+            Modifier
                 .fillMaxSize()
-                .padding(start = if (isWideScreen && drawerOpen) 311.48.dp else 0.dp),
+                .padding(
+                    start = if (isWideScreen && drawerOpen) {
+                        (com.yuyuyu.deepseek.ui.theme.DsMetric.drawerWidthDp(winCfg.screenWidthDp) + 1f).dp
+                    } else 0.dp
+                ),
             contentAlignment = Alignment.BottomCenter,
         ) {
             VoiceOverlay(
