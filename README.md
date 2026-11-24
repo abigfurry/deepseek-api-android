@@ -111,3 +111,6 @@ app/src/main/java/
 
 - 邮箱：3982548020@qq.com
 - 侵权投诉 / 功能建议 / Bug 反馈都发这个邮箱。
+
+## 使用教程
+- [导入聊天记录 & 充值 API 余额](docs/usage-import-and-topup.md)
