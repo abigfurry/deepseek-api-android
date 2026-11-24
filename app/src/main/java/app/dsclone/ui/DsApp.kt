@@ -125,6 +125,9 @@ fun DsApp() {
     var showModel by remember { mutableStateOf(false) }
     var showContext by remember { mutableStateOf(false) }
     var activeCall by remember { mutableStateOf<Call?>(null) }
+    // 用户主动点「停止生成」时置 true：此时 OkHttp 会走 onFailure，
+    // 不能把用户自己取消当成"请求失败"（官方是保留已生成内容、不报错，并可继续生成）。
+    var userStopped by remember { mutableStateOf(false) }
     val attachments = remember { mutableStateListOf<Attachment>() }
     var cameraOpen by remember {
         mutableStateOf(
@@ -427,6 +430,24 @@ $$
             onSteps = { steps, rawCalls, citations -> enqueueSteps(steps, rawCalls, citations) },
             onError = { err ->
                 main.post {
+                    if (userStopped) {
+                        // 用户主动停止：保留已生成的部分，不算错误（官方行为）
+                        val stopped = finish()
+                        patch(sessionId, botMsg.id) { m ->
+                            m.copy(
+                                reasoning = stopped.reasoning,
+                                steps = if (stopped.steps.isEmpty()) m.steps else stopped.steps,
+                                citations = if (stopped.citations.isEmpty()) m.citations else stopped.citations,
+                                streaming = false,
+                                error = false,
+                                text = if (stopped.text.isBlank()) m.text else stopped.text,
+                            ).syncActiveVariant()
+                        }
+                        sending = false
+                        userStopped = false
+                        persist()
+                        return@post
+                    }
                     val finalMsg = finish()
                     patch(sessionId, botMsg.id) { m ->
                         m.copy(
@@ -805,6 +826,8 @@ $$
                     onVoiceCancel = { voiceCancelArmed = true; voiceHolding = false; runCatching { voice.cancel() } },
                 onVoiceCancelArm = { armed -> voiceCancelArmed = armed },
                     onStop = {
+                        // 用户主动停止：标记一下，让 onError 不把它当失败
+                        userStopped = true
                         activeCall?.cancel()
                         activeCall = null
                         sending = false
