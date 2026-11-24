@@ -299,7 +299,7 @@ object Client {
         val call = http.newCall(request)
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                onError(e.message ?: "网络连接失败")
+                onError(friendlyNetworkError(e))
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -321,7 +321,7 @@ object Client {
                             readChatStream(r, onDelta, onDone, onError, onSteps)
                         }
                     } catch (e: Exception) {
-                        onError(e.message ?: "读取响应失败")
+                        onError(friendlyNetworkError(e))
                     }
                 }
             }
@@ -469,6 +469,31 @@ object Client {
      * 如果 message 提示要换接口（含 /v1/responses、Responses、chat/completions 等字样），
      * 追加一行「去设置里切 Responses」的指引。
      */
+    /**
+     * 网络层异常 → 用户能看懂的中文提示。
+     * 以前直接把 e.message 显示出来（例如 "Unable to resolve host \"api.deepseek.com\": No address associated with hostname"），
+     * 用户看到的就是一串英文日志；这里按异常类型映射成一句话。
+     */
+    fun friendlyNetworkError(e: Throwable): String {
+        val msg = (e.message ?: "").lowercase()
+        val name = e.javaClass.simpleName.lowercase()
+        return when {
+            e is java.net.UnknownHostException || "unable to resolve host" in msg || "no address associated" in msg ->
+                "网络未连接或域名解析失败，请检查网络后重试"
+            e is java.net.ConnectException || "connection refused" in msg || "failed to connect" in msg ->
+                "无法连接到服务器，请检查网络或代理设置"
+            e is java.net.SocketTimeoutException || "timeout" in msg || "timed out" in msg ->
+                "请求超时，请检查网络后重试"
+            e is javax.net.ssl.SSLException || "ssl" in msg || "certificate" in msg ->
+                "安全连接失败（证书/SSL 问题），请检查网络代理"
+            "network is unreachable" in msg || "no route to host" in msg ->
+                "网络不可用，请检查是否已联网"
+            name.contains("cleartexthttptraffic") || "cleartext" in msg ->
+                "该地址使用了不安全的 http，请改用 https"
+            else -> "网络请求失败，请检查网络后重试"
+        }
+    }
+
     fun friendlyHttpError(code: Int, body: String): String {
         val text = body.trim()
         val err = try {
