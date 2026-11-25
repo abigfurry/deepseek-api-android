@@ -157,8 +157,14 @@ object Client {
     }
     val sysPrompt = effectiveSystemPrompt(settings)
     if (sysPrompt.isNotBlank()) {
-        // system 消息放最前面：有的 OpenAI 兼容服务端不允许多条 system
-        msgs.put(0, JSONObject().put("role", "system").put("content", sysPrompt))
+        // system 消息放最前面：有的 OpenAI 兼容服务端不允许多条 system。
+        // 注意不能用 msgs.put(0, ...)：JSONArray.put(index, value) 是**替换**，会把第一条 user 顶掉
+        // （之前的 bug：设了系统提示词后，唯一一条 user 被 system 覆盖 → 服务端报 400
+        //  “at least one user message with text or images is required”）。
+        val withSystem = JSONArray()
+        withSystem.put(JSONObject().put("role", "system").put("content", sysPrompt))
+        for (i in 0 until msgs.length()) withSystem.put(msgs.get(i))
+        payload.put("messages", withSystem)
     }
         if (isDeepSeek) {
             payload.put("thinking", JSONObject().put("type", if (settings.thinking) "enabled" else "disabled"))
@@ -302,7 +308,8 @@ object Client {
         for ((name, value) in ProviderApi.authHeaders(preset, settings.apiKey)) {
             requestBuilder.header(name, value)
         }
-        val request = requestBuilder.post(payload.toString().toRequestBody(JSON)).build()
+        val bodyText = payload.toString()
+        val request = requestBuilder.post(bodyText.toRequestBody(JSON)).build()
 
         val call = http.newCall(request)
         call.enqueue(object : Callback {

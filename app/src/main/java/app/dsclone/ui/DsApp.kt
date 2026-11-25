@@ -123,6 +123,8 @@ fun DsApp() {
     // 系统「动画时长缩放」：逐帧动画（FrameAnim）的时长按它缩放（0=直接到末态）
     LaunchedEffect(Unit) { DsAnimScale.read(ctx) }
     val scope = rememberCoroutineScope()
+    // 打开附件面板时要收起输入法（用户反馈：点 ⊕ 后键盘还挂着遮挡面板）
+    val appFocus = androidx.compose.ui.platform.LocalFocusManager.current
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val atBottom by androidx.compose.runtime.remember(listState) {
         androidx.compose.runtime.derivedStateOf {
@@ -1143,6 +1145,16 @@ $$
                     onAddAttachment = {
             val willOpen = !attachSheet
             attachSheet = willOpen
+            if (willOpen) {
+                appFocus.clearFocus()
+                runCatching {
+                    val imm = ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as? android.view.inputmethod.InputMethodManager
+                    val tk = (ctx as? android.app.Activity)?.window?.decorView?.windowToken
+                    if (imm != null && tk != null) imm.hideSoftInputFromWindow(tk, 0)
+                }
+                recentRefresh++
+            }
             // 官方：打开附件面板时请求相册权限（UploadPanelPermission.kt），拿到后显示最近图片
             if (willOpen && !mediaGranted) mediaPermission.launch(mediaReadPermission())
         },
