@@ -1159,6 +1159,7 @@ $$
             if (willOpen && !mediaGranted) mediaPermission.launch(mediaReadPermission())
         },
                     onRemoveAttachment = { attachments.remove(it) },
+                    onFieldFocused = { attachSheet = false },
                     sending = sending,
                     thinking = settings.thinking,
                     search = settings.search,

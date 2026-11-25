@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -290,6 +292,8 @@ fun InputBar(
     onToggleVoice: () -> Unit = {},
     onVoiceStart: () -> Unit = {},
     onVoiceStop: () -> Unit = {},
+    /** 输入框获得焦点（键盘要弹出）时回调：用来收起已经打开的附件面板 */
+    onFieldFocused: () -> Unit = {},
     onVoiceCancel: () -> Unit = {},
     onVoiceCancelArm: (Boolean) -> Unit = {},
     // 上下文用量圈（「+」左边 22dp 细环）：已用 tokens / 上限 tokens，调用方在 DsApp 里算好传进来
@@ -493,6 +497,10 @@ fun InputBar(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(fieldFocus)
+                                .onFocusChanged { st ->
+                                    // 附件面板开着时点输入框：键盘要出来，先把面板收起（否则两层叠着）
+                                    if (st.isFocused) onFieldFocused()
+                                }
                                 .heightIn(min = DsMetric.cardTextFieldMinH.dp),
                             // 输入正文官方 17sp / 26sp / 字重 Normal —— kt:ChatInputField.kt:105
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
@@ -671,7 +679,9 @@ fun InputBar(
                             // 发送态没有官方截图可对照，保持原有蓝色圆钮（28.57dp，居中在同一个 25dp 盒里）
                             Box(
                                 Modifier
-                                    .size(DsMetric.sendBtnSize.dp)
+                                    // requiredSize：父盒只有 25dp 宽，用 size() 会被压成 25×28.57 的椭圆；
+                                    // requiredSize 不受父约束，才是正圆（官方就是 28.57dp 圆钮居中在 25dp 槽里）
+                                    .requiredSize(DsMetric.sendBtnSize.dp)
                                     .clip(CircleShape)
                                     .background(DsBlue)
                                     .clickable {

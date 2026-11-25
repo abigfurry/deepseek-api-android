@@ -453,11 +453,12 @@ private fun MessageRow(
                     if (m.text.isNotBlank()) {
                         Surface(
                             color = ds.userBubble,
-                            // 官方：用户气泡圆角 ≈20.5dp（拟合 20.46，取 20）—— 实测 audit-chat.png
+                            // 官方用户气泡不是四个角一样圆：右下角明显更小（截图实测 ≈8dp，
+                            // 其它三角 ≈20dp），形成「小尾巴」的观感。
                             shape = RoundedCornerShape(
                                 topStart = DsMetric.bubbleRadius.dp,
                                 topEnd = DsMetric.bubbleRadius.dp,
-                                bottomEnd = DsMetric.bubbleRadius.dp,
+                                bottomEnd = 8.dp,
                                 bottomStart = DsMetric.bubbleRadius.dp,
                             ),
                         ) {
