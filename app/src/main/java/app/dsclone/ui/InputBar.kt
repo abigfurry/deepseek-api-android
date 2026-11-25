@@ -114,7 +114,10 @@ private fun Chip(
     //   图标：墨迹 13.5dp；原先 17.52dp 盒实际渲染 15.5dp，改成 16dp 盒后≈14.2dp
     //   内容在药丸内**水平居中**：官方左留白 12.5dp / 右留白 12dp，
     //   原先 start=7.61dp 左对齐 → 视觉上偏左
-    val chipOffIcon = Color(0xFF8E9094)   // 官方未选中态图标灰，来源见上（OFFICIAL-UI-SPEC.md §4）
+    val darkTheme = ds.cardBg.luminance() < 0.5f
+    // 官方未选中态图标与文字同色（a11-off-10-empty 实测：浅色近黑 #191B23；
+    // a11-off-darkchat2 实测：深色近白 #F8F8F8）。之前浅色用灰 #8E9094 是错的。
+    val chipOffIcon = if (darkTheme) Color(0xFFF5F6F8) else Color(0xFF191B23)
     val chipDisabled = Color(0xFFB9BABB)  // 官方禁用态图标/文字色，来源同上
     val fill by androidx.compose.animation.animateColorAsState(
         targetValue = if (on) ds.chipOn else ds.cardBg,
@@ -164,9 +167,9 @@ private fun Chip(
                 // 而官方 chip 实际是 OFF 图标 #8E9094、ON 浅 #426EFE / 深 #6799FE（深色截图实测），
                 // 所以这里在解析前把 JSON 里的颜色三元组替换成当前主题色（见 recolorLottieColor）。
                 val ctx = androidx.compose.ui.platform.LocalContext.current
-                val darkTheme = ds.cardBg.luminance() < 0.5f
-                // #8E9094 → 0.557,0.565,0.580；#6799FE → 0.404,0.600,0.996；#426EFE → 0.259,0.431,0.996
-                val offHex = "0.557,0.565,0.580"
+                // 浅色近黑 #191B23 → 0.098,0.106,0.137；深色近白 #F8F8F8 → 0.973,0.973,0.973
+                // #6799FE → 0.404,0.600,0.996；#426EFE → 0.259,0.431,0.996
+                val offHex = if (darkTheme) "0.973,0.973,0.973" else "0.098,0.106,0.137"
                 val onHex = if (darkTheme) "0.404,0.600,0.996" else "0.259,0.431,0.996"
                 val specOff = remember(lottieRes, darkTheme) {
                     com.airbnb.lottie.compose.LottieCompositionSpec.JsonString(
