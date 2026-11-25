@@ -192,6 +192,13 @@ val VoiceOptions = listOf(
     VoiceOption("tide", "潮汐", "低沉男声"),
 )
 
+/** 一条自定义人设：名字 + 系统提示词（可保存多条，选一条全局生效） */
+data class Persona(
+    val id: String = "",
+    val name: String = "",
+    val prompt: String = "",
+)
+
 data class Settings(
     val providerId: String = "deepseek",
     val baseUrl: String = "https://api.deepseek.com",
@@ -223,9 +230,11 @@ data class Settings(
     val followSystemFont: Boolean = true,
     /** 个性化-思考内容自动折叠（官方 thinking_auto_fold，默认开） */
     val autoFoldThinking: Boolean = true,
-    /** 自定义人格：开启后所有对话都带这段系统提示词（在数据管理里设置） */
+    /** 自定义人格：开启后所有对话都带选中人格的系统提示词（在数据管理里设置） */
     val personaEnabled: Boolean = false,
-    val personaPrompt: String = "",
+    /** 可保存多个人格，[personaId] 是当前使用的那一个 */
+    val personas: List<Persona> = emptyList(),
+    val personaId: String = "",
     /** 数据管理-数据用于优化体验（官方 profile_imporve_model，默认开） */
     val trainOnData: Boolean = true,
     /**

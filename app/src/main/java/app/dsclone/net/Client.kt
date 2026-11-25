@@ -101,7 +101,10 @@ object Client {
         imageDataUrls: List<String> = emptyList(),
     ): JSONObject {
         val msgs = JSONArray()
-        val cleaned = cleanHistory(history)
+        var cleaned = cleanHistory(history)
+        if (cleaned.none { it.role == "user" }) {
+            cleaned = cleaned + Msg(role = "user", text = "继续")
+        }
         // 图片只挂在最后一条 user 上（也就是这次新发的那条）
         val lastUserIndex = cleaned.indexOfLast { it.role == "user" }
         cleaned.forEachIndexed { i, m ->
@@ -214,7 +217,10 @@ object Client {
         history: List<Msg>,
         imageDataUrls: List<String> = emptyList(),
     ): JSONObject {
-        val cleaned = cleanHistory(history)
+        var cleaned = cleanHistory(history)
+        if (cleaned.none { it.role == "user" }) {
+            cleaned = cleaned + Msg(role = "user", text = "继续")
+        }
         val lastUserIndex = cleaned.indexOfLast { it.role == "user" }
         val input = JSONArray()
         cleaned.forEachIndexed { i, m ->
@@ -545,7 +551,10 @@ object Client {
 /** 自定义人格（设置→数据管理里打开）优先，其次才是「系统提示词」；两者都有就拼在一起。 */
 private fun effectiveSystemPrompt(s: com.yuyuyu.deepseek.data.Settings): String {
     val sb = StringBuilder()
-    if (s.personaEnabled && s.personaPrompt.isNotBlank()) sb.append(s.personaPrompt.trim())
+    if (s.personaEnabled) {
+        val p = s.personas.firstOrNull { it.id == s.personaId } ?: s.personas.firstOrNull()
+        if (p != null && p.prompt.isNotBlank()) sb.append(p.prompt.trim())
+    }
     if (s.systemPrompt.isNotBlank()) {
         if (sb.isNotEmpty()) sb.append("\n\n")
         sb.append(s.systemPrompt.trim())

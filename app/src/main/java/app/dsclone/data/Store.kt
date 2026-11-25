@@ -114,7 +114,29 @@ object Store {
                 autoFoldThinking = o.optBoolean("autoFoldThinking", true),
                 trainOnData = o.optBoolean("trainOnData", true),
                 personaEnabled = o.optBoolean("personaEnabled", false),
-                personaPrompt = str(o, "personaPrompt"),
+                personas = run {
+                    val list = ArrayList<Persona>()
+                    val arr = o.optJSONArray("personas")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val p = arr.optJSONObject(i) ?: continue
+                            val id = p.optString("id", "")
+                            val prompt = p.optString("prompt", "")
+                            if (id.isNotBlank() && prompt.isNotBlank()) {
+                                list.add(Persona(id, p.optString("name", "未命名"), prompt))
+                            }
+                        }
+                    }
+                    if (list.isEmpty()) {
+                        // 老版本只有单条 personaPrompt：迁移成「默认人格」
+                        val legacy = str(o, "personaPrompt").trim()
+                        if (legacy.isNotEmpty()) list.add(Persona("legacy", "默认人格", legacy))
+                    }
+                    list
+                },
+                personaId = o.optString("personaId", "").ifBlank {
+                    if (str(o, "personaPrompt").isNotBlank()) "legacy" else ""
+                },
                 preloadHistory = o.optBoolean("preloadHistory", false),
                 appLanguage = str(o, "appLanguage", "system"),
                 // 朗读音色：新字段是 voiceId；老版本写的是 voice，两个都认，缺省 stella
@@ -193,7 +215,10 @@ object Store {
             .put("autoFoldThinking", s.autoFoldThinking)
             .put("trainOnData", s.trainOnData)
             .put("personaEnabled", s.personaEnabled)
-            .put("personaPrompt", s.personaPrompt)
+            .put("personaId", s.personaId)
+            .put("personas", JSONArray().also { arr ->
+                for (p in s.personas) arr.put(JSONObject().put("id", p.id).put("name", p.name).put("prompt", p.prompt))
+            })
             .put("preloadHistory", s.preloadHistory)
             .put("appLanguage", s.appLanguage)
             .put("voiceId", s.voiceId)

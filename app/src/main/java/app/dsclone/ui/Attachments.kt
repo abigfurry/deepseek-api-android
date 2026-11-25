@@ -372,10 +372,36 @@ fun queryRecentImageUris(ctx: android.content.Context, limit: Int = 30): List<Ur
 
 /** 权限通过后异步加载最近图片列表（面板每次打开时刷新）。 */
 @Composable
-fun rememberRecentImageUris(permissionGranted: Boolean, limit: Int = 30): List<Uri> {
+fun rememberRecentImageUris(
+    permissionGranted: Boolean,
+    limit: Int = 30,
+    refreshKey: Int = 0,
+): List<Uri> {
     val ctx = LocalContext.current
     var list by remember(permissionGranted, limit) { mutableStateOf<List<Uri>>(emptyList()) }
-    LaunchedEffect(permissionGranted, limit) {
+    // 相册变动（刚截的图 / 刚拍的照片 / 刚保存的图片）时自动重新查询，
+    // 不用重进 App 或重开面板（之前 MediaStore 只查一次，用户看到"图片更新有延迟"）。
+    var tick by remember { mutableStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(permissionGranted) {
+        if (!permissionGranted) return@DisposableEffect onDispose { }
+        val obs = object : android.database.ContentObserver(
+            android.os.Handler(android.os.Looper.getMainLooper())
+        ) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+                tick++
+            }
+        }
+        val registered = runCatching {
+            ctx.contentResolver.registerContentObserver(
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, obs
+            )
+        }.isSuccess
+        onDispose {
+            if (registered) runCatching { ctx.contentResolver.unregisterContentObserver(obs) }
+        }
+    }
+    LaunchedEffect(permissionGranted, limit, refreshKey, tick) {
         list = if (!permissionGranted) emptyList()
         else withContext(Dispatchers.IO) { queryRecentImageUris(ctx, limit) }
     }

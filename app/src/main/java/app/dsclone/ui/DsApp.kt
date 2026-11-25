@@ -310,7 +310,8 @@ fun DsApp() {
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { granted -> mediaGranted = granted || hasMediaReadPermission(ctx) }
     // 面板打开且有权限时刷新最近图片（UploadPanelImageScroller 等价实现）
-    val recentImages = rememberRecentImageUris(mediaGranted, limit = 30)
+    var recentRefresh by remember { mutableStateOf(0) }
+    val recentImages = rememberRecentImageUris(mediaGranted, limit = 30, refreshKey = recentRefresh)
     val fileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
